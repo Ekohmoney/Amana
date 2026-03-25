@@ -1,23 +1,24 @@
-import * as StellarSdk from "@stellar/stellar-sdk";
+import { Horizon, SorobanRpc, TransactionBuilder, BASE_FEE, xdr } from '@stellar/stellar-sdk';
+import { 
+  horizonServer, 
+  sorobanRpcClient, 
+  networkPassphrase 
+} from '../config/stellar';
 
 export class StellarService {
-  private server: StellarSdk.Horizon.Server;
+  private horizonServer: Horizon.Server;
+  private sorobanRpc: SorobanRpc.Server;
   private networkPassphrase: string;
-  private networkType: string;
 
   constructor() {
-    this.networkType = process.env.STELLAR_NETWORK || "TESTNET";
-    if (this.networkType === "PUBLIC") {
-      this.server = new StellarSdk.Horizon.Server("https://horizon.stellar.org");
-      this.networkPassphrase = StellarSdk.Networks.PUBLIC;
-    } else {
-      this.server = new StellarSdk.Horizon.Server("https://horizon-testnet.stellar.org");
-      this.networkPassphrase = StellarSdk.Networks.TESTNET;
-    }
+    this.horizonServer = horizonServer;
+    this.sorobanRpc = sorobanRpcClient;
+    this.networkPassphrase = networkPassphrase;
   }
 
-  public getServer(): StellarSdk.Horizon.Server {
-    return this.server;
+  // Temporary backward compatibility methods - to be removed
+  public getServer(): Horizon.Server {
+    return this.horizonServer;
   }
 
   public getNetworkPassphrase(): string {
@@ -26,7 +27,7 @@ export class StellarService {
 
   public async getAccountBalance(publicKey: string, assetCode: string = "USDC"): Promise<string> {
     try {
-      const account = await this.server.loadAccount(publicKey);
+      const account = await this.horizonServer.loadAccount(publicKey);
       const balance = account.balances.find((b: any) => {
         if (assetCode === "XLM") {
           return b.asset_type === "native";
@@ -37,6 +38,101 @@ export class StellarService {
     } catch (error) {
       console.error(`Failed to get balance for ${publicKey}:`, error);
       throw new Error("Unable to fetch balance");
+    }
+  }
+
+  public async buildTransaction(sourceAccount: string, operations: xdr.Operation[]): Promise<string> {
+    try {
+      // Load source account from Horizon to get sequence number
+      const account = await this.horizonServer.loadAccount(sourceAccount);
+      
+      // Create TransactionBuilder with source, fee, and network passphrase
+      const transactionBuilder = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      });
+      
+      // Add all operations to builder
+      for (const operation of operations) {
+        transactionBuilder.addOperation(operation);
+      }
+      
+      // Set transaction timeout (180 seconds)
+      transactionBuilder.setTimeout(180);
+      
+      // Build and return transaction.toXDR() as base64 string
+      const transaction = transactionBuilder.build();
+      return transaction.toXDR();
+    } catch (error: any) {
+      if (error.response && error.response.status === 404) {
+        console.error(`Source account not found: ${sourceAccount}`, error);
+        throw new Error("Source account does not exist");
+      }
+      if (error.message && error.message.includes('operation')) {
+        console.error(`Invalid transaction operations:`, error);
+        throw new Error(`Invalid transaction operations: ${error.message}`);
+      }
+      console.error(`Failed to build transaction:`, error);
+      throw new Error(`Failed to build transaction: ${error.message || 'Unknown error'}`);
+    }
+  }
+
+  public async submitTransaction(signedXdr: string): Promise<SorobanRpc.Api.SendTransactionResponse> {
+    try {
+      // Parse XDR into Transaction object
+      const transaction = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
+      
+      // Call sorobanRpc.sendTransaction(transaction)
+      const response = await this.sorobanRpc.sendTransaction(transaction as any);
+      
+      // Log transaction hash for debugging
+      console.log(`Transaction submitted with hash: ${response.hash}`);
+      
+      // Check response status
+      if (response.status === 'ERROR') {
+        // Differentiate between RPC errors and contract panics
+        if (response.errorResult) {
+          // Contract panic - execution failure
+          const errorMessage = this.parseContractError(response.errorResult);
+          console.error(`Contract Panic:`, errorMessage);
+          throw new Error(`Contract Panic: ${errorMessage}`);
+        } else {
+          // RPC error - infrastructure failure
+          console.error(`RPC Error:`, response);
+          throw new Error(`RPC Error: ${response.status}`);
+        }
+      }
+      
+      // Return response on success
+      return response;
+    } catch (error: any) {
+      // Handle XDR parsing errors
+      if (error.message && error.message.includes('XDR')) {
+        console.error(`Invalid transaction XDR:`, error);
+        throw new Error(`Invalid transaction XDR: ${error.message}`);
+      }
+      
+      // Re-throw if already a formatted error
+      if (error.message && (error.message.includes('RPC Error:') || error.message.includes('Contract Panic:'))) {
+        throw error;
+      }
+      
+      // Handle network/timeout errors
+      console.error(`Transaction submission failed:`, error);
+      throw new Error(`Transaction submission failed: ${error.message || 'Unknown error'}`);
+    }
+  }
+
+  private parseContractError(errorResult: any): string {
+    // Extract meaningful error message from contract error result
+    try {
+      if (typeof errorResult === 'string') {
+        return errorResult;
+      }
+      // Return JSON stringified version for objects
+      return JSON.stringify(errorResult);
+    } catch {
+      return 'Unknown contract error';
     }
   }
 }
