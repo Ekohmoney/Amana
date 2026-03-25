@@ -46,6 +46,8 @@ if (process.env.NODE_ENV !== "production" && openapiSpec) {
   app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(openapiSpec));
 }
 
+app.use("/users", userRoutes);
+
 app.get("/health", (_req, res) => {
   res.status(200).json({
     status: "ok",
