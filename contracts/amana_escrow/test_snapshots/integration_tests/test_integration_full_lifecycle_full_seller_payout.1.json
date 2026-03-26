@@ -175,7 +175,10 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                 },
                 {
-                  "bytes": "73656c6c65722d70726f6f662d6f662d64656c69766572792d697066732d636964"
+                  "string": "QmSellerProofOfDelivery"
+                },
+                {
+                  "string": "Delivery confirmation"
                 }
               ]
             }
@@ -184,7 +187,6 @@
         }
       ]
     ],
-    [],
     [],
     [
       [
@@ -427,7 +429,71 @@
               },
               "durability": "persistent",
               "val": {
-                "bytes": "73656c6c65722d70726f6f662d6f662d64656c69766572792d697066732d636964"
+                "bytes": ""
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 4095
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "EvidenceList"
+                  },
+                  {
+                    "u64": "1"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "vec": [
+                  {
+                    "map": [
+                      {
+                        "key": {
+                          "symbol": "description_hash"
+                        },
+                        "val": {
+                          "string": "Delivery confirmation"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "ipfs_hash"
+                        },
+                        "val": {
+                          "string": "QmSellerProofOfDelivery"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "submitted_at"
+                        },
+                        "val": {
+                          "u64": "2000"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "submitter"
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                        }
+                      }
+                    ]
+                  }
+                ]
               }
             }
           },

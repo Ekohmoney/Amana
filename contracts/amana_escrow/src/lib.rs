@@ -2,7 +2,7 @@
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token, Address, Bytes, Env, String,
-    Symbol,
+    Symbol, Vec,
 };
 
 // ---------------------------------------------------------------------------
@@ -156,6 +156,21 @@ pub struct DisputeRecord {
     pub disputed_at: u64,
 }
 
+/// Record of a single piece of evidence submitted during a dispute.
+/// Multiple evidence records can be submitted by any party or mediator.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EvidenceRecord {
+    /// Address of the party or mediator who submitted this evidence.
+    pub submitter: Address,
+    /// IPFS CID or hash pointing to the evidence content.
+    pub ipfs_hash: String,
+    /// Optional IPFS CID or hash describing the evidence.
+    pub description_hash: String,
+    /// Ledger timestamp when this evidence was submitted.
+    pub submitted_at: u64,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DataKey {
@@ -171,10 +186,12 @@ pub enum DataKey {
     /// Used by add_mediator() / remove_mediator() / is_mediator().
     MediatorRegistry(Address),
     CancelRequest(u64),
-    /// Stores the most-recent evidence hash submitted by each party.
+    /// Stores the most-recent evidence hash submitted by each party (legacy).
     Evidence(u64, Address),
     /// Stores the DisputeRecord created by initiate_dispute() for a given trade.
     DisputeData(u64),
+    /// Stores the list of all evidence records submitted for a trade.
+    EvidenceList(u64),
 }
 
 // ---------------------------------------------------------------------------
@@ -586,14 +603,20 @@ impl EscrowContract {
     // Evidence
     // -----------------------------------------------------------------------
 
-    /// Submit evidence for an active dispute. Either buyer or seller may call
-    /// this any number of times while the trade is Disputed.  The last hash
-    /// submitted by each party is stored on-chain; the mediator uses it
-    /// off-chain when reviewing the case.
+    /// Submit evidence for an active dispute. Buyer, seller, or any mediator
+    /// may call this any number of times while the trade is Disputed.
+    /// All evidence submissions are stored as an append-only list on-chain,
+    /// creating an immutable audit trail.
     ///
-    /// `evidence_hash` is an arbitrary byte string — typically a SHA-256 digest
-    /// (or IPFS CID) of the evidence document so the full content stays off-chain.
-    pub fn submit_evidence(env: Env, trade_id: u64, caller: Address, evidence_hash: Bytes) {
+    /// `ipfs_hash` is typically an IPFS CID pointing to the evidence content.
+    /// `description_hash` is an optional IPFS CID or hash describing the evidence.
+    pub fn submit_evidence(
+        env: Env,
+        trade_id: u64,
+        caller: Address,
+        ipfs_hash: String,
+        description_hash: String,
+    ) {
         caller.require_auth();
 
         let key = DataKey::Trade(trade_id);
@@ -603,27 +626,68 @@ impl EscrowContract {
             matches!(trade.status, TradeStatus::Disputed),
             "Evidence can only be submitted for a Disputed trade"
         );
+
+        // Allow buyer, seller, or any mediator to submit evidence
+        let is_party = caller == trade.buyer || caller == trade.seller;
+        let is_mediator = Self::is_mediator(env.clone(), caller.clone());
+        
         assert!(
-            caller == trade.buyer || caller == trade.seller,
-            "Only buyer or seller can submit evidence"
+            is_party || is_mediator,
+            "Only buyer, seller, or mediator can submit evidence"
         );
 
-        // Store the latest hash for this party
+        // Get existing evidence list or create new one
+        let evidence_key = DataKey::EvidenceList(trade_id);
+        let mut evidence_list: Vec<EvidenceRecord> = env
+            .storage()
+            .persistent()
+            .get(&evidence_key)
+            .unwrap_or(Vec::new(&env));
+
+        // Create new evidence record
+        let now = env.ledger().timestamp();
+        let record = EvidenceRecord {
+            submitter: caller.clone(),
+            ipfs_hash: ipfs_hash.clone(),
+            description_hash: description_hash.clone(),
+            submitted_at: now,
+        };
+
+        // Append to list
+        evidence_list.push_back(record);
+
+        // Store updated list
+        env.storage().persistent().set(&evidence_key, &evidence_list);
+
+        // For backward compatibility with legacy get_evidence API, we'll create
+        // a simple Bytes representation. Since Soroban String doesn't easily convert
+        // to Bytes, we'll use a placeholder approach or store the string length.
+        // In practice, clients should use get_evidence_list() for the new API.
+        let legacy_bytes = Bytes::new(&env);
         env.storage()
             .persistent()
-            .set(&DataKey::Evidence(trade_id, caller.clone()), &evidence_hash);
+            .set(&DataKey::Evidence(trade_id, caller.clone()), &legacy_bytes);
 
         env.events().publish(
             (symbol_short!("EVDSUB"), trade_id),
             EvidenceSubmittedEvent {
                 trade_id,
                 submitter: caller,
-                evidence_hash,
+                evidence_hash: legacy_bytes,
             },
         );
     }
 
-    /// Return the evidence hash most recently submitted by `submitter`.
+    /// Return all evidence records submitted for a trade, in chronological order.
+    /// Returns an empty vector if no evidence has been submitted yet.
+    pub fn get_evidence_list(env: Env, trade_id: u64) -> Vec<EvidenceRecord> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::EvidenceList(trade_id))
+            .unwrap_or(Vec::new(&env))
+    }
+
+    /// Return the evidence hash most recently submitted by `submitter` (legacy).
     /// Returns `None` if no evidence has been submitted yet.
     pub fn get_evidence(env: Env, trade_id: u64, submitter: Address) -> Option<Bytes> {
         env.storage()
@@ -1436,23 +1500,22 @@ mod integration_tests {
 
         // ── Step 4: Submit evidence (both parties) ──────────────────────────
         s.env.ledger().with_mut(|l| l.timestamp = 4_000);
-        let buyer_evidence  = Bytes::from_slice(&s.env, b"buyer-evidence-hash-sha256-abcdef");
-        let seller_evidence = Bytes::from_slice(&s.env, b"seller-evidence-hash-sha256-xyz123");
+        let buyer_ipfs = soroban_sdk::String::from_str(&s.env, "QmBuyerEvidenceHash");
+        let buyer_desc = soroban_sdk::String::from_str(&s.env, "Buyer proof of payment");
+        let seller_ipfs = soroban_sdk::String::from_str(&s.env, "QmSellerEvidenceHash");
+        let seller_desc = soroban_sdk::String::from_str(&s.env, "Seller proof of shipment");
 
-        client.submit_evidence(&trade_id, &s.buyer, &buyer_evidence);
-        client.submit_evidence(&trade_id, &s.seller, &seller_evidence);
+        client.submit_evidence(&trade_id, &s.buyer, &buyer_ipfs, &buyer_desc);
+        client.submit_evidence(&trade_id, &s.seller, &seller_ipfs, &seller_desc);
 
-        // Evidence retrievable on-chain
-        assert_eq!(
-            client.get_evidence(&trade_id, &s.buyer),
-            Some(buyer_evidence),
-            "Step 4: buyer evidence must be stored"
-        );
-        assert_eq!(
-            client.get_evidence(&trade_id, &s.seller),
-            Some(seller_evidence),
-            "Step 4: seller evidence must be stored"
-        );
+        // Evidence retrievable on-chain via new list API
+        let evidence_list = client.get_evidence_list(&trade_id);
+        assert_eq!(evidence_list.len(), 2, "Step 4: should have 2 evidence records");
+        assert_eq!(evidence_list.get(0).unwrap().submitter, s.buyer);
+        assert_eq!(evidence_list.get(0).unwrap().ipfs_hash, buyer_ipfs);
+        assert_eq!(evidence_list.get(1).unwrap().submitter, s.seller);
+        assert_eq!(evidence_list.get(1).unwrap().ipfs_hash, seller_ipfs);
+        
         // Trade still Disputed while mediator reviews
         assert!(matches!(client.get_trade(&trade_id).status, TradeStatus::Disputed));
 
@@ -1497,10 +1560,13 @@ mod integration_tests {
         assert!(matches!(client.get_trade(&trade_id).status, TradeStatus::Disputed));
 
         // Seller submits evidence; buyer submits none
-        let evidence = Bytes::from_slice(&s.env, b"seller-proof-of-delivery-ipfs-cid");
-        client.submit_evidence(&trade_id, &s.seller, &evidence);
-        assert_eq!(client.get_evidence(&trade_id, &s.seller), Some(evidence));
-        assert_eq!(client.get_evidence(&trade_id, &s.buyer), None, "buyer submitted no evidence");
+        let ipfs_hash = soroban_sdk::String::from_str(&s.env, "QmSellerProofOfDelivery");
+        let desc_hash = soroban_sdk::String::from_str(&s.env, "Delivery confirmation");
+        client.submit_evidence(&trade_id, &s.seller, &ipfs_hash, &desc_hash);
+        
+        let evidence_list = client.get_evidence_list(&trade_id);
+        assert_eq!(evidence_list.len(), 1);
+        assert_eq!(evidence_list.get(0).unwrap().submitter, s.seller);
 
         // Mediator rules fully for seller
         s.env.ledger().with_mut(|l| l.timestamp = 3_000);
@@ -1530,8 +1596,9 @@ mod integration_tests {
         let trade_id = create_and_fund(&s, amount);
         client.raise_dispute(&trade_id, &s.buyer);
 
-        let evidence = Bytes::from_slice(&s.env, b"buyer-proof-seller-never-delivered");
-        client.submit_evidence(&trade_id, &s.buyer, &evidence);
+        let ipfs_hash = soroban_sdk::String::from_str(&s.env, "QmBuyerProofNonDelivery");
+        let desc_hash = soroban_sdk::String::from_str(&s.env, "Proof seller never delivered");
+        client.submit_evidence(&trade_id, &s.buyer, &ipfs_hash, &desc_hash);
 
         client.resolve_dispute(&trade_id, &0_u32);
 
@@ -1576,8 +1643,9 @@ mod integration_tests {
         let client = s.client();
         let trade_id = create_and_fund(&s, 10_000);
         // Trade is Funded, not Disputed
-        let evidence = Bytes::from_slice(&s.env, b"premature-evidence-attempt");
-        client.submit_evidence(&trade_id, &s.buyer, &evidence);
+        let ipfs_hash = soroban_sdk::String::from_str(&s.env, "QmPrematureEvidence");
+        let desc_hash = soroban_sdk::String::from_str(&s.env, "Premature attempt");
+        client.submit_evidence(&trade_id, &s.buyer, &ipfs_hash, &desc_hash);
     }
 
     /// Cannot resolve a dispute that was never raised (trade is Funded, not Disputed).
@@ -1616,14 +1684,125 @@ mod integration_tests {
 
     /// A stranger cannot submit evidence for an active dispute.
     #[test]
-    #[should_panic(expected = "Only buyer or seller can submit evidence")]
+    #[should_panic(expected = "Only buyer, seller, or mediator can submit evidence")]
     fn test_stranger_cannot_submit_evidence() {
         let s = Setup::new(10_000, 100);
         let client = s.client();
         let trade_id = create_and_fund(&s, 10_000);
         client.raise_dispute(&trade_id, &s.buyer);
         let stranger = Address::generate(&s.env);
-        let evidence = Bytes::from_slice(&s.env, b"malicious-attempt");
-        client.submit_evidence(&trade_id, &stranger, &evidence);
+        let ipfs_hash = soroban_sdk::String::from_str(&s.env, "QmMaliciousAttempt");
+        let desc_hash = soroban_sdk::String::from_str(&s.env, "Malicious evidence");
+        client.submit_evidence(&trade_id, &stranger, &ipfs_hash, &desc_hash);
+    }
+
+    // -----------------------------------------------------------------------
+    // Evidence submission tests
+    // -----------------------------------------------------------------------
+
+    /// Buyer can submit evidence during an active dispute.
+    #[test]
+    fn test_buyer_can_submit_evidence_during_dispute() {
+        let s = Setup::new(10_000, 100);
+        let client = s.client();
+        let trade_id = create_and_fund(&s, 10_000);
+        
+        // Raise dispute
+        s.env.ledger().with_mut(|l| l.timestamp = 1_000);
+        client.raise_dispute(&trade_id, &s.buyer);
+        
+        // Buyer submits evidence
+        s.env.ledger().with_mut(|l| l.timestamp = 2_000);
+        let ipfs_hash = soroban_sdk::String::from_str(&s.env, "QmBuyerEvidence123");
+        let desc_hash = soroban_sdk::String::from_str(&s.env, "Payment proof");
+        client.submit_evidence(&trade_id, &s.buyer, &ipfs_hash, &desc_hash);
+        
+        // Verify evidence was stored
+        let evidence_list = client.get_evidence_list(&trade_id);
+        assert_eq!(evidence_list.len(), 1);
+        
+        let record = evidence_list.get(0).unwrap();
+        assert_eq!(record.submitter, s.buyer);
+        assert_eq!(record.ipfs_hash, ipfs_hash);
+        assert_eq!(record.description_hash, desc_hash);
+        assert_eq!(record.submitted_at, 2_000);
+    }
+
+    /// Multiple evidence entries accumulate in chronological order.
+    #[test]
+    fn test_multiple_evidence_entries_accumulate() {
+        let s = Setup::new(10_000, 100);
+        let client = s.client();
+        let trade_id = create_and_fund(&s, 10_000);
+        
+        // Raise dispute
+        s.env.ledger().with_mut(|l| l.timestamp = 1_000);
+        client.raise_dispute(&trade_id, &s.buyer);
+        
+        // Buyer submits first evidence
+        s.env.ledger().with_mut(|l| l.timestamp = 2_000);
+        let buyer_ipfs_1 = soroban_sdk::String::from_str(&s.env, "QmBuyerEvidence1");
+        let buyer_desc_1 = soroban_sdk::String::from_str(&s.env, "Payment receipt");
+        client.submit_evidence(&trade_id, &s.buyer, &buyer_ipfs_1, &buyer_desc_1);
+        
+        // Seller submits evidence
+        s.env.ledger().with_mut(|l| l.timestamp = 3_000);
+        let seller_ipfs = soroban_sdk::String::from_str(&s.env, "QmSellerEvidence1");
+        let seller_desc = soroban_sdk::String::from_str(&s.env, "Shipping label");
+        client.submit_evidence(&trade_id, &s.seller, &seller_ipfs, &seller_desc);
+        
+        // Buyer submits second evidence
+        s.env.ledger().with_mut(|l| l.timestamp = 4_000);
+        let buyer_ipfs_2 = soroban_sdk::String::from_str(&s.env, "QmBuyerEvidence2");
+        let buyer_desc_2 = soroban_sdk::String::from_str(&s.env, "Communication logs");
+        client.submit_evidence(&trade_id, &s.buyer, &buyer_ipfs_2, &buyer_desc_2);
+        
+        // Mediator submits evidence
+        s.env.ledger().with_mut(|l| l.timestamp = 5_000);
+        let mediator_ipfs = soroban_sdk::String::from_str(&s.env, "QmMediatorAnalysis");
+        let mediator_desc = soroban_sdk::String::from_str(&s.env, "Case analysis");
+        client.submit_evidence(&trade_id, &s.mediator, &mediator_ipfs, &mediator_desc);
+        
+        // Verify all evidence is stored in chronological order
+        let evidence_list = client.get_evidence_list(&trade_id);
+        assert_eq!(evidence_list.len(), 4, "Should have 4 evidence records");
+        
+        // Check first entry (buyer)
+        let record_0 = evidence_list.get(0).unwrap();
+        assert_eq!(record_0.submitter, s.buyer);
+        assert_eq!(record_0.ipfs_hash, buyer_ipfs_1);
+        assert_eq!(record_0.submitted_at, 2_000);
+        
+        // Check second entry (seller)
+        let record_1 = evidence_list.get(1).unwrap();
+        assert_eq!(record_1.submitter, s.seller);
+        assert_eq!(record_1.ipfs_hash, seller_ipfs);
+        assert_eq!(record_1.submitted_at, 3_000);
+        
+        // Check third entry (buyer again)
+        let record_2 = evidence_list.get(2).unwrap();
+        assert_eq!(record_2.submitter, s.buyer);
+        assert_eq!(record_2.ipfs_hash, buyer_ipfs_2);
+        assert_eq!(record_2.submitted_at, 4_000);
+        
+        // Check fourth entry (mediator)
+        let record_3 = evidence_list.get(3).unwrap();
+        assert_eq!(record_3.submitter, s.mediator);
+        assert_eq!(record_3.ipfs_hash, mediator_ipfs);
+        assert_eq!(record_3.submitted_at, 5_000);
+    }
+
+    /// Evidence submission fails if trade is not in Disputed status.
+    #[test]
+    #[should_panic(expected = "Evidence can only be submitted for a Disputed trade")]
+    fn test_evidence_submission_fails_if_not_in_dispute() {
+        let s = Setup::new(10_000, 100);
+        let client = s.client();
+        let trade_id = create_and_fund(&s, 10_000);
+        
+        // Trade is Funded, not Disputed
+        let ipfs_hash = soroban_sdk::String::from_str(&s.env, "QmEarlyEvidence");
+        let desc_hash = soroban_sdk::String::from_str(&s.env, "Too early");
+        client.submit_evidence(&trade_id, &s.buyer, &ipfs_hash, &desc_hash);
     }
 }

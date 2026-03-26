@@ -179,7 +179,10 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "bytes": "62757965722d65766964656e63652d686173682d7368613235362d616263646566"
+                  "string": "QmBuyerEvidenceHash"
+                },
+                {
+                  "string": "Buyer proof of payment"
                 }
               ]
             }
@@ -204,7 +207,10 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                 },
                 {
-                  "bytes": "73656c6c65722d65766964656e63652d686173682d7368613235362d78797a313233"
+                  "string": "QmSellerEvidenceHash"
+                },
+                {
+                  "string": "Seller proof of shipment"
                 }
               ]
             }
@@ -213,7 +219,6 @@
         }
       ]
     ],
-    [],
     [],
     [],
     [
@@ -477,7 +482,7 @@
               },
               "durability": "persistent",
               "val": {
-                "bytes": "62757965722d65766964656e63652d686173682d7368613235362d616263646566"
+                "bytes": ""
               }
             }
           },
@@ -507,7 +512,107 @@
               },
               "durability": "persistent",
               "val": {
-                "bytes": "73656c6c65722d65766964656e63652d686173682d7368613235362d78797a313233"
+                "bytes": ""
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 4095
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "EvidenceList"
+                  },
+                  {
+                    "u64": "1"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "vec": [
+                  {
+                    "map": [
+                      {
+                        "key": {
+                          "symbol": "description_hash"
+                        },
+                        "val": {
+                          "string": "Buyer proof of payment"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "ipfs_hash"
+                        },
+                        "val": {
+                          "string": "QmBuyerEvidenceHash"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "submitted_at"
+                        },
+                        "val": {
+                          "u64": "4000"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "submitter"
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "map": [
+                      {
+                        "key": {
+                          "symbol": "description_hash"
+                        },
+                        "val": {
+                          "string": "Seller proof of shipment"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "ipfs_hash"
+                        },
+                        "val": {
+                          "string": "QmSellerEvidenceHash"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "submitted_at"
+                        },
+                        "val": {
+                          "u64": "4000"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "submitter"
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                        }
+                      }
+                    ]
+                  }
+                ]
               }
             }
           },

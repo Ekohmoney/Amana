@@ -173,10 +173,66 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "string": "QmBuyerProofNonDelivery"
+                  "string": "QmBuyerEvidence1"
                 },
                 {
-                  "string": "Proof seller never delivered"
+                  "string": "Payment receipt"
+                }
+              ]
+            }
+          },
+          "sub_invocations": []
+        }
+      ]
+    ],
+    [
+      [
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+        {
+          "function": {
+            "contract_fn": {
+              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+              "function_name": "submit_evidence",
+              "args": [
+                {
+                  "u64": "1"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                },
+                {
+                  "string": "QmSellerEvidence1"
+                },
+                {
+                  "string": "Shipping label"
+                }
+              ]
+            }
+          },
+          "sub_invocations": []
+        }
+      ]
+    ],
+    [
+      [
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+        {
+          "function": {
+            "contract_fn": {
+              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+              "function_name": "submit_evidence",
+              "args": [
+                {
+                  "u64": "1"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                },
+                {
+                  "string": "QmBuyerEvidence2"
+                },
+                {
+                  "string": "Communication logs"
                 }
               ]
             }
@@ -192,13 +248,19 @@
           "function": {
             "contract_fn": {
               "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
-              "function_name": "resolve_dispute",
+              "function_name": "submit_evidence",
               "args": [
                 {
                   "u64": "1"
                 },
                 {
-                  "u32": 0
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
+                },
+                {
+                  "string": "QmMediatorAnalysis"
+                },
+                {
+                  "string": "Case analysis"
                 }
               ]
             }
@@ -207,15 +269,12 @@
         }
       ]
     ],
-    [],
-    [],
-    [],
     []
   ],
   "ledger": {
     "protocol_version": 25,
     "sequence_number": 0,
-    "timestamp": 0,
+    "timestamp": 5000,
     "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
     "base_reserve": 0,
     "min_persistent_entry_ttl": 4096,
@@ -372,7 +431,47 @@
               "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
               "key": {
                 "ledger_key_nonce": {
+                  "nonce": "5806905060045992000"
+                }
+              },
+              "durability": "temporary",
+              "val": "void"
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 6311999
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+              "key": {
+                "ledger_key_nonce": {
                   "nonce": "8370022561469687789"
+                }
+              },
+              "durability": "temporary",
+              "val": "void"
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 6311999
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+              "key": {
+                "ledger_key_nonce": {
+                  "nonce": "6277191135259896685"
                 }
               },
               "durability": "temporary",
@@ -392,7 +491,7 @@
               "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
               "key": {
                 "ledger_key_nonce": {
-                  "nonce": "6277191135259896685"
+                  "nonce": "1194852393571756375"
                 }
               },
               "durability": "temporary",
@@ -443,6 +542,66 @@
               "key": {
                 "vec": [
                   {
+                    "symbol": "Evidence"
+                  },
+                  {
+                    "u64": "1"
+                  },
+                  {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "bytes": ""
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 4095
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "Evidence"
+                  },
+                  {
+                    "u64": "1"
+                  },
+                  {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "bytes": ""
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 4095
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+              "key": {
+                "vec": [
+                  {
                     "symbol": "EvidenceList"
                   },
                   {
@@ -460,7 +619,7 @@
                           "symbol": "description_hash"
                         },
                         "val": {
-                          "string": "Proof seller never delivered"
+                          "string": "Payment receipt"
                         }
                       },
                       {
@@ -468,7 +627,7 @@
                           "symbol": "ipfs_hash"
                         },
                         "val": {
-                          "string": "QmBuyerProofNonDelivery"
+                          "string": "QmBuyerEvidence1"
                         }
                       },
                       {
@@ -476,7 +635,7 @@
                           "symbol": "submitted_at"
                         },
                         "val": {
-                          "u64": "0"
+                          "u64": "2000"
                         }
                       },
                       {
@@ -485,6 +644,114 @@
                         },
                         "val": {
                           "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "map": [
+                      {
+                        "key": {
+                          "symbol": "description_hash"
+                        },
+                        "val": {
+                          "string": "Shipping label"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "ipfs_hash"
+                        },
+                        "val": {
+                          "string": "QmSellerEvidence1"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "submitted_at"
+                        },
+                        "val": {
+                          "u64": "3000"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "submitter"
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "map": [
+                      {
+                        "key": {
+                          "symbol": "description_hash"
+                        },
+                        "val": {
+                          "string": "Communication logs"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "ipfs_hash"
+                        },
+                        "val": {
+                          "string": "QmBuyerEvidence2"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "submitted_at"
+                        },
+                        "val": {
+                          "u64": "4000"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "submitter"
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "map": [
+                      {
+                        "key": {
+                          "symbol": "description_hash"
+                        },
+                        "val": {
+                          "string": "Case analysis"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "ipfs_hash"
+                        },
+                        "val": {
+                          "string": "QmMediatorAnalysis"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "submitted_at"
+                        },
+                        "val": {
+                          "u64": "5000"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "submitter"
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
                         }
                       }
                     ]
@@ -613,7 +880,7 @@
                     "val": {
                       "vec": [
                         {
-                          "symbol": "Completed"
+                          "symbol": "Disputed"
                         }
                       ]
                     }
@@ -639,7 +906,7 @@
                       "symbol": "updated_at"
                     },
                     "val": {
-                      "u64": "0"
+                      "u64": "1000"
                     }
                   }
                 ]
@@ -779,7 +1046,7 @@
                       "symbol": "amount"
                     },
                     "val": {
-                      "i128": "10000"
+                      "i128": "0"
                     }
                   },
                   {
@@ -831,7 +1098,7 @@
                       "symbol": "amount"
                     },
                     "val": {
-                      "i128": "0"
+                      "i128": "10000"
                     }
                   },
                   {
