@@ -140,6 +140,8 @@ pub struct Trade {
     pub updated_at: u64,
     pub funded_at: Option<u64>,
     pub delivered_at: Option<u64>,
+    pub buyer_loss_bps: u32,
+    pub seller_loss_bps: u32,
 }
 
 /// Persistent record of a dispute created by `initiate_dispute()`.
@@ -275,8 +277,9 @@ impl EscrowContract {
     // Trade lifecycle
     // -----------------------------------------------------------------------
 
-    pub fn create_trade(env: Env, buyer: Address, seller: Address, amount: i128) -> u64 {
+    pub fn create_trade(env: Env, buyer: Address, seller: Address, amount: i128, buyer_loss_bps: u32, seller_loss_bps: u32) -> u64 {
         assert!(amount > 0, "amount must be greater than zero");
+        assert!(buyer_loss_bps + seller_loss_bps == 10_000, "loss ratios must sum to 10000 (100%)");
         let next_id: u64 = env.storage().instance().get(&NEXT_TRADE_ID).unwrap_or(1_u64);
         let ledger_seq = env.ledger().sequence() as u64;
         let trade_id = (ledger_seq << 32) | next_id;
@@ -294,6 +297,8 @@ impl EscrowContract {
             updated_at: now,
             funded_at: None,
             delivered_at: None,
+            buyer_loss_bps,
+            seller_loss_bps,
         };
         env.storage().persistent().set(&DataKey::Trade(trade_id), &trade);
         env.events().publish((symbol_short!("TRDCRT"), trade_id), TradeCreatedEvent {
@@ -664,7 +669,7 @@ mod test {
         let token_client = token::StellarAssetClient::new(env, &usdc_id);
         token_client.mint(&buyer, &amount);
 
-        let trade_id = client.create_trade(&buyer, &seller, &amount);
+        let trade_id = client.create_trade(&buyer, &seller, &amount, &5000_u32, &5000_u32);
         client.deposit(&trade_id);
 
         (contract_id, usdc_id, buyer, seller, treasury, trade_id)
@@ -699,7 +704,7 @@ mod test {
         let token_client = token::StellarAssetClient::new(&env, &usdc_id);
         token_client.mint(&buyer, &amount);
 
-        let trade_id = client.create_trade(&buyer, &seller, &amount);
+        let trade_id = client.create_trade(&buyer, &seller, &amount, &5000_u32, &5000_u32);
 
         env.ledger().with_mut(|li| li.timestamp = 1000);
         client.deposit(&trade_id);
@@ -727,7 +732,7 @@ mod test {
         let usdc_id = env.register_stellar_asset_contract(admin.clone());
         client.initialize(&admin, &usdc_id, &treasury, &100);
 
-        let trade_id = client.create_trade(&buyer, &seller, &1000_i128);
+        let trade_id = client.create_trade(&buyer, &seller, &1000_i128, &5000_u32, &5000_u32);
         client.mock_auths(&[]).deposit(&trade_id);
     }
 
@@ -749,7 +754,7 @@ mod test {
         let token_client = token::StellarAssetClient::new(&env, &usdc_id);
         token_client.mint(&buyer, &(amount * 2));
 
-        let trade_id = client.create_trade(&buyer, &seller, &amount);
+        let trade_id = client.create_trade(&buyer, &seller, &amount, &5000_u32, &5000_u32);
         client.deposit(&trade_id);
         client.deposit(&trade_id);
     }
@@ -767,11 +772,11 @@ mod test {
         let usdc_id = env.register_stellar_asset_contract(admin.clone());
         client.initialize(&admin, &usdc_id, &treasury, &100);
 
-        let trade_id_1 = client.create_trade(&buyer, &seller, &1000_i128);
+        let trade_id_1 = client.create_trade(&buyer, &seller, &1000_i128, &5000_u32, &5000_u32);
         client.cancel_trade(&trade_id_1, &buyer);
         assert!(matches!(client.get_trade(&trade_id_1).status, TradeStatus::Cancelled));
 
-        let trade_id_2 = client.create_trade(&buyer, &seller, &1000_i128);
+        let trade_id_2 = client.create_trade(&buyer, &seller, &1000_i128, &5000_u32, &5000_u32);
         client.cancel_trade(&trade_id_2, &seller);
         assert!(matches!(client.get_trade(&trade_id_2).status, TradeStatus::Cancelled));
     }
@@ -793,7 +798,7 @@ mod test {
         let token_client = token::StellarAssetClient::new(&env, &usdc_id);
         token_client.mint(&buyer, &amount);
 
-        let trade_id = client.create_trade(&buyer, &seller, &amount);
+        let trade_id = client.create_trade(&buyer, &seller, &amount, &5000_u32, &5000_u32);
         client.deposit(&trade_id);
 
         client.cancel_trade(&trade_id, &buyer);
@@ -820,7 +825,7 @@ mod test {
         let token_client = token::StellarAssetClient::new(&env, &usdc_id);
         token_client.mint(&buyer, &amount);
 
-        let trade_id = client.create_trade(&buyer, &seller, &amount);
+        let trade_id = client.create_trade(&buyer, &seller, &amount, &5000_u32, &5000_u32);
         client.deposit(&trade_id);
 
         let token_readonly = token::Client::new(&env, &usdc_id);
@@ -851,7 +856,7 @@ mod test {
         let token_client = token::StellarAssetClient::new(&env, &usdc_id);
         token_client.mint(&buyer, &amount);
 
-        let trade_id = client.create_trade(&buyer, &seller, &amount);
+        let trade_id = client.create_trade(&buyer, &seller, &amount, &5000_u32, &5000_u32);
         client.deposit(&trade_id);
         client.confirm_delivery(&trade_id);
 
@@ -876,7 +881,7 @@ mod test {
         let token_client = token::StellarAssetClient::new(&env, &usdc_id);
         token_client.mint(&buyer, &amount);
 
-        let trade_id = client.create_trade(&buyer, &seller, &amount);
+        let trade_id = client.create_trade(&buyer, &seller, &amount, &5000_u32, &5000_u32);
         client.deposit(&trade_id);
         client.confirm_delivery(&trade_id);
         client.release_funds(&trade_id);
@@ -886,6 +891,66 @@ mod test {
         assert_eq!(token_readonly.balance(&treasury), 100);
         assert_eq!(token_readonly.balance(&client.address), 0);
         assert!(matches!(client.get_trade(&trade_id).status, TradeStatus::Completed));
+    }
+
+    // -----------------------------------------------------------------------
+    // Loss-sharing ratio tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_create_trade_with_valid_loss_ratios() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        let seller = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let usdc_id = env.register_stellar_asset_contract(admin.clone());
+        client.initialize(&admin, &usdc_id, &treasury, &100);
+
+        // Test 50/50 split
+        let trade_id_1 = client.create_trade(&buyer, &seller, &1000_i128, &5000_u32, &5000_u32);
+        let trade_1 = client.get_trade(&trade_id_1);
+        assert_eq!(trade_1.buyer_loss_bps, 5000);
+        assert_eq!(trade_1.seller_loss_bps, 5000);
+
+        // Test 70/30 split (buyer bears 70% of loss)
+        let trade_id_2 = client.create_trade(&buyer, &seller, &2000_i128, &7000_u32, &3000_u32);
+        let trade_2 = client.get_trade(&trade_id_2);
+        assert_eq!(trade_2.buyer_loss_bps, 7000);
+        assert_eq!(trade_2.seller_loss_bps, 3000);
+
+        // Test 100/0 split (buyer bears all loss)
+        let trade_id_3 = client.create_trade(&buyer, &seller, &3000_i128, &10000_u32, &0_u32);
+        let trade_3 = client.get_trade(&trade_id_3);
+        assert_eq!(trade_3.buyer_loss_bps, 10000);
+        assert_eq!(trade_3.seller_loss_bps, 0);
+
+        // Test 0/100 split (seller bears all loss)
+        let trade_id_4 = client.create_trade(&buyer, &seller, &4000_i128, &0_u32, &10000_u32);
+        let trade_4 = client.get_trade(&trade_id_4);
+        assert_eq!(trade_4.buyer_loss_bps, 0);
+        assert_eq!(trade_4.seller_loss_bps, 10000);
+    }
+
+    #[test]
+    #[should_panic(expected = "loss ratios must sum to 10000 (100%)")]
+    fn test_create_trade_fails_if_ratios_dont_sum_to_100() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        let seller = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let usdc_id = env.register_stellar_asset_contract(admin.clone());
+        client.initialize(&admin, &usdc_id, &treasury, &100);
+
+        // This should panic: 5000 + 4000 = 9000 ≠ 10000
+        client.create_trade(&buyer, &seller, &1000_i128, &5000_u32, &4000_u32);
     }
 
     // -----------------------------------------------------------------------
@@ -1039,7 +1104,7 @@ mod test {
         let token_client = token::StellarAssetClient::new(&env, &usdc_id);
         token_client.mint(&buyer, &amount);
 
-        let trade_id = client.create_trade(&buyer, &seller, &amount);
+        let trade_id = client.create_trade(&buyer, &seller, &amount, &5000_u32, &5000_u32);
         client.deposit(&trade_id);
 
         env.ledger().with_mut(|l| l.timestamp = 5_000);
@@ -1076,7 +1141,7 @@ mod test {
         let token_client = token::StellarAssetClient::new(&env, &usdc_id);
         token_client.mint(&buyer, &amount);
 
-        let trade_id = client.create_trade(&buyer, &seller, &amount);
+        let trade_id = client.create_trade(&buyer, &seller, &amount, &5000_u32, &5000_u32);
         client.deposit(&trade_id);
 
         env.ledger().with_mut(|l| l.timestamp = 9_000);
@@ -1108,7 +1173,7 @@ mod test {
         client.initialize(&admin, &usdc_id, &treasury, &100);
 
         // create_trade but NO deposit — trade is still Created
-        let trade_id = client.create_trade(&buyer, &seller, &5_000_i128);
+        let trade_id = client.create_trade(&buyer, &seller, &5_000_i128, &5000_u32, &5000_u32);
         let reason = soroban_sdk::String::from_str(&env, "QmPrematureDispute");
         client.initiate_dispute(&trade_id, &buyer, &reason);
     }
@@ -1132,7 +1197,7 @@ mod test {
         let token_client = token::StellarAssetClient::new(&env, &usdc_id);
         token_client.mint(&buyer, &amount);
 
-        let trade_id = client.create_trade(&buyer, &seller, &amount);
+        let trade_id = client.create_trade(&buyer, &seller, &amount, &5000_u32, &5000_u32);
         client.deposit(&trade_id);
 
         let reason = soroban_sdk::String::from_str(&env, "QmFirstDispute");
@@ -1317,7 +1382,7 @@ mod integration_tests {
     /// Create a trade and immediately deposit funds. Returns the trade_id.
     fn create_and_fund(s: &Setup, amount: i128) -> u64 {
         let client = s.client();
-        let trade_id = client.create_trade(&s.buyer, &s.seller, &amount);
+        let trade_id = client.create_trade(&s.buyer, &s.seller, &amount, &5000_u32, &5000_u32);
         client.deposit(&trade_id);
         trade_id
     }
@@ -1344,7 +1409,7 @@ mod integration_tests {
 
         // ── Step 1: Create trade ────────────────────────────────────────────
         s.env.ledger().with_mut(|l| l.timestamp = 1_000);
-        let trade_id = client.create_trade(&s.buyer, &s.seller, &amount);
+        let trade_id = client.create_trade(&s.buyer, &s.seller, &amount, &5000_u32, &5000_u32);
 
         let trade = client.get_trade(&trade_id);
         assert!(matches!(trade.status, TradeStatus::Created), "Step 1: must be Created");
@@ -1486,7 +1551,7 @@ mod integration_tests {
     fn test_cannot_raise_dispute_before_funding() {
         let s = Setup::new(10_000, 100);
         let client = s.client();
-        let trade_id = client.create_trade(&s.buyer, &s.seller, &10_000_i128);
+        let trade_id = client.create_trade(&s.buyer, &s.seller, &10_000_i128, &5000_u32, &5000_u32);
         // deposit deliberately skipped — trade is still Created
         client.raise_dispute(&trade_id, &s.buyer);
     }
