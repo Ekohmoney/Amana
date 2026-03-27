@@ -16,6 +16,7 @@ import { createEvidenceRouter } from "./routes/evidence.routes";
 import { createAuditTrailRouter } from "./routes/auditTrail.routes";
 import { createApp } from "./app";
 import { env } from "./config/env";
+import { appLogger } from "./middleware/logger";
 
 env; // Validate early
 
@@ -30,14 +31,14 @@ let openapiSpec: unknown = null;
 try {
   openapiSpec = YAML.load(openapiYamlPath);
 } catch (error) {
-  console.warn("OpenAPI spec could not be loaded:", error);
+  appLogger.warn({ error }, "OpenAPI spec could not be loaded");
 }
 
 if (process.env.NODE_ENV !== "production" && openapiSpec) {
   try {
     fs.writeFileSync(openapiJsonPath, JSON.stringify(openapiSpec, null, 2));
   } catch (error) {
-    console.warn("OpenAPI spec could not be exported:", error);
+    appLogger.warn({ error }, "OpenAPI spec could not be exported");
   }
 
   app.get("/api/docs/openapi.json", (_req, res) => {
@@ -52,18 +53,18 @@ app.use("/users", userRoutes);
 const eventListenerService = new EventListenerService(prisma);
 
 app.listen(port, async () => {
-  console.log(`Amana backend listening on port ${port}`);
+  appLogger.info({ port }, "Amana backend listening");
 
   try {
     await eventListenerService.start();
-    console.log("EventListenerService started successfully");
+    appLogger.info("EventListenerService started successfully");
   } catch (error) {
-    console.error("Failed to start EventListenerService:", error);
+    appLogger.error({ error }, "Failed to start EventListenerService");
   }
 });
 
 const shutdown = async (signal: string) => {
-  console.log(`\nReceived ${signal}. Shutting down gracefully...`);
+  appLogger.info({ signal }, "Received shutdown signal. Shutting down gracefully...");
   eventListenerService.stop();
   await prisma.$disconnect();
   process.exit(0);

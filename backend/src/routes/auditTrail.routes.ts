@@ -6,6 +6,7 @@ import {
     AuditTrailAccessDeniedError,
     AuditTrailTradeNotFoundError,
 } from "../services/auditTrail.service";
+import { appLogger } from "../middleware/logger";
 
 export function createAuditTrailRouter(auditService = new AuditTrailService()) {
     const router = Router({ mergeParams: true });
@@ -48,7 +49,7 @@ export function createAuditTrailRouter(auditService = new AuditTrailService()) {
                 res.status(403).json({ error: err.message });
                 return;
             }
-            console.error("[AuditTrailRoute] Error:", err);
+            appLogger.error({ err }, "[AuditTrailRoute] Error");
             res.status(500).json({ error: "Failed to retrieve trade history" });
         }
     });

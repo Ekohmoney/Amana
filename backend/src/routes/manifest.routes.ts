@@ -3,6 +3,7 @@ import { z } from "zod";
 import { authMiddleware, AuthRequest } from "../middleware/auth.middleware";
 import { ManifestService, ManifestForbiddenError, ManifestConflictError, ManifestTradeStatusError, ManifestTradeNotFoundError } from "../services/manifest.service";
 import { ContractService } from "../services/contract.service";
+import { appLogger } from "../middleware/logger";
 
 const manifestBodySchema = z.object({
     driverName: z.string().min(1),
@@ -60,7 +61,7 @@ export function createManifestRouter(
                 res.status((err as any).status).json({ error: err.message });
                 return;
             }
-            console.error("[ManifestRoute] Error:", err);
+            appLogger.error({ err }, "[ManifestRoute] Error");
             res.status(500).json({ error: "Failed to submit manifest" });
         }
     });

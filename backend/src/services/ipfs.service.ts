@@ -1,5 +1,6 @@
 import { Readable } from "stream";
 import { getPinataClient } from "../config/ipfs";
+import { appLogger } from "../middleware/logger";
 
 export class ServiceUnavailableError extends Error {
     status = 503;
@@ -27,7 +28,7 @@ export class IPFSService {
             });
             return result.IpfsHash;
         } catch (err) {
-            console.error("[IPFSService] Pinata upload failed:", err);
+            appLogger.error({ err }, "[IPFSService] Pinata upload failed");
             throw new ServiceUnavailableError();
         }
     }

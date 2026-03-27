@@ -5,6 +5,7 @@ import {
     EvidenceAccessDeniedError,
     EvidenceTradeNotFoundError,
 } from "../services/evidence.service";
+import { appLogger } from "../middleware/logger";
 
 export function createEvidenceRouter(evidenceService = new EvidenceService()) {
     const router = Router({ mergeParams: true });
@@ -32,7 +33,7 @@ export function createEvidenceRouter(evidenceService = new EvidenceService()) {
                 res.status(403).json({ error: err.message });
                 return;
             }
-            console.error("[EvidenceRoute] Error:", err);
+            appLogger.error({ err }, "[EvidenceRoute] Error");
             res.status(500).json({ error: "Failed to retrieve evidence" });
         }
     });
@@ -67,7 +68,7 @@ export function createEvidenceRouter(evidenceService = new EvidenceService()) {
             res.status(status);
             upstream.data.pipe(res);
         } catch (err) {
-            console.error("[EvidenceRoute] Stream error:", err);
+            appLogger.error({ err }, "[EvidenceRoute] Stream error");
             res.status(502).json({ error: "Failed to stream from IPFS gateway" });
         }
     });

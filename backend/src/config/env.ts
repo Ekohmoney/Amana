@@ -14,7 +14,3 @@ const envSchema = z.object({
 
 export const env = envSchema.parse(process.env);
 
-if (env.NODE_ENV === 'production') {
-  console.log = () => {}; // Disable console in prod
-}
-

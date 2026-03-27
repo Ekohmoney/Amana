@@ -2,7 +2,7 @@ import pinoHttp from 'pino-http';
 import pino from 'pino';
 import { env } from '../config/env';
 
-const logger = pino({
+export const appLogger = pino({
   level: env.NODE_ENV === 'production' ? 'info' : 'debug',
   transport: {
     target: 'pino-pretty',
@@ -13,7 +13,7 @@ const logger = pino({
 });
 
 export default pinoHttp({
-  logger,
+  logger: appLogger,
   serializers: pinoHttp.stdSerializers,
   autoLogging: {
     ignore: (req) => req.path.match(/^\/health/) || req.path.match(/^\/api\/docs/),
