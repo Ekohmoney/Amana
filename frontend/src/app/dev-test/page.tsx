@@ -1,6 +1,13 @@
 import { Icon } from "@/components/ui/Icon";
-import { Spinner } from "@/components/ui/Spinner";
-import { LoadingState } from "@/components/ui/LoadingState";
+
+import { StepIndicator } from "@/components/ui/StepIndicator";
+
+const STEPS = [
+  { label: "Create Trade", description: "3-step flow" },
+  { label: "Verification", description: "4-step flow" },
+  { label: "Withdraw", description: "Almost done" },
+  { label: "Summary", description: "Final step" },
+];
 
 const SAMPLE_ICONS = [
   "shield",
@@ -37,6 +44,34 @@ export default function IconDevPage() {
               <span className="text-xs text-text-muted">{s}</span>
             </div>
           ))}
+        </div>
+      </section>
+
+      {/* Step Indicator showase */}
+      <section className="mb-20">
+        <h2 className="text-xs font-semibold tracking-widest text-text-muted mb-8 uppercase">
+          Step Indicator (Multi-step flow)
+        </h2>
+        <div className="space-y-16">
+          <div className="bg-bg-card p-8 rounded-xl border border-border-default">
+            <p className="text-xs text-text-muted mb-6">Current Step: 0 (Initial)</p>
+            <StepIndicator steps={STEPS} currentStep={0} />
+          </div>
+
+          <div className="bg-bg-card p-8 rounded-xl border border-border-default">
+            <p className="text-xs text-text-muted mb-6">Current Step: 1 (In Progress)</p>
+            <StepIndicator steps={STEPS} currentStep={1} />
+          </div>
+
+          <div className="bg-bg-card p-8 rounded-xl border border-border-default">
+            <p className="text-xs text-text-muted mb-6">Completed Steps: [0, 1], Current Step: 2</p>
+            <StepIndicator steps={STEPS} currentStep={2} completedSteps={[0, 1]} />
+          </div>
+
+          <div className="bg-bg-card p-8 rounded-xl border border-border-default">
+            <p className="text-xs text-text-muted mb-6">All Completed (Step 3 reached)</p>
+            <StepIndicator steps={STEPS} currentStep={3} completedSteps={[0, 1, 2]} />
+          </div>
         </div>
       </section>
 
