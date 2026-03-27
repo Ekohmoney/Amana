@@ -2184,4 +2184,158 @@ mod integration_tests {
         let desc_hash = soroban_sdk::String::from_str(&s.env, "Too early");
         client.submit_evidence(&trade_id, &s.buyer, &ipfs_hash, &desc_hash);
     }
+
+    // -----------------------------------------------------------------------
+    // Additional evidence hash submission tests
+    // -----------------------------------------------------------------------
+
+    /// Test evidence hash integrity: verify that IPFS CIDs are stored correctly
+    /// and can be retrieved without modification. This ensures the immutability
+    /// of evidence records on-chain.
+    #[test]
+    fn test_evidence_hash_integrity_and_retrieval() {
+        let s = Setup::new(10_000, 100);
+        let client = s.client();
+        
+        // Create and fund trade, then raise dispute
+        let trade_id = create_and_fund(&s, 10_000);
+        client.raise_dispute(&trade_id, &s.buyer);
+        
+        // Submit evidence with specific IPFS CID format
+        s.env.ledger().with_mut(|l| l.timestamp = 1_000);
+        let ipfs_cid = soroban_sdk::String::from_str(
+            &s.env, 
+            "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG"
+        );
+        let description = soroban_sdk::String::from_str(
+            &s.env,
+            "SHA256:a3b2c1d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6"
+        );
+        
+        client.submit_evidence(&trade_id, &s.buyer, &ipfs_cid, &description);
+        
+        // Retrieve and verify evidence
+        let evidence_list = client.get_evidence_list(&trade_id);
+        assert_eq!(evidence_list.len(), 1, "Should have exactly one evidence record");
+        
+        let record = evidence_list.get(0).unwrap();
+        assert_eq!(record.submitter, s.buyer, "Submitter should be buyer");
+        assert_eq!(record.ipfs_hash, ipfs_cid, "IPFS hash must match exactly");
+        assert_eq!(record.description_hash, description, "Description hash must match exactly");
+        assert_eq!(record.submitted_at, 1_000, "Timestamp should be recorded");
+        
+        // Submit second evidence with different hash format
+        s.env.ledger().with_mut(|l| l.timestamp = 2_000);
+        let ipfs_cid_2 = soroban_sdk::String::from_str(
+            &s.env,
+            "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
+        );
+        let description_2 = soroban_sdk::String::from_str(
+            &s.env,
+            "BLAKE2b:1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t1u2v3w4x5y6z"
+        );
+        
+        client.submit_evidence(&trade_id, &s.seller, &ipfs_cid_2, &description_2);
+        
+        // Verify both evidence records are intact
+        let evidence_list = client.get_evidence_list(&trade_id);
+        assert_eq!(evidence_list.len(), 2, "Should have two evidence records");
+        
+        // First record should remain unchanged
+        let record_1 = evidence_list.get(0).unwrap();
+        assert_eq!(record_1.ipfs_hash, ipfs_cid, "First IPFS hash unchanged");
+        assert_eq!(record_1.description_hash, description, "First description unchanged");
+        
+        // Second record should be stored correctly
+        let record_2 = evidence_list.get(1).unwrap();
+        assert_eq!(record_2.submitter, s.seller, "Second submitter should be seller");
+        assert_eq!(record_2.ipfs_hash, ipfs_cid_2, "Second IPFS hash must match");
+        assert_eq!(record_2.description_hash, description_2, "Second description must match");
+        assert_eq!(record_2.submitted_at, 2_000, "Second timestamp should be recorded");
+    }
+
+    /// Test mediator evidence submission: verify that mediators can submit
+    /// evidence during disputes and that their submissions are properly
+    /// recorded alongside buyer and seller evidence.
+    #[test]
+    fn test_mediator_can_submit_evidence_with_hash() {
+        let s = Setup::new(10_000, 100);
+        let client = s.client();
+        
+        // Setup: create trade, fund, and raise dispute
+        let trade_id = create_and_fund(&s, 10_000);
+        client.raise_dispute(&trade_id, &s.buyer);
+        
+        // Register a mediator
+        let mediator = Address::generate(&s.env);
+        client.add_mediator(&mediator);
+        
+        // Buyer submits initial evidence
+        s.env.ledger().with_mut(|l| l.timestamp = 1_000);
+        let buyer_ipfs = soroban_sdk::String::from_str(
+            &s.env,
+            "QmBuyerEvidence123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        );
+        let buyer_desc = soroban_sdk::String::from_str(
+            &s.env,
+            "Proof of damaged goods with driver signature"
+        );
+        client.submit_evidence(&trade_id, &s.buyer, &buyer_ipfs, &buyer_desc);
+        
+        // Seller submits counter-evidence
+        s.env.ledger().with_mut(|l| l.timestamp = 2_000);
+        let seller_ipfs = soroban_sdk::String::from_str(
+            &s.env,
+            "QmSellerEvidence987654321ZYXWVUTSRQPONMLKJIHGFEDCBA"
+        );
+        let seller_desc = soroban_sdk::String::from_str(
+            &s.env,
+            "Proof of proper packaging and delivery confirmation"
+        );
+        client.submit_evidence(&trade_id, &s.seller, &seller_ipfs, &seller_desc);
+        
+        // Mediator submits independent investigation evidence
+        s.env.ledger().with_mut(|l| l.timestamp = 3_000);
+        let mediator_ipfs = soroban_sdk::String::from_str(
+            &s.env,
+            "QmMediatorInvestigation555666777888999AAABBBCCCDDD"
+        );
+        let mediator_desc = soroban_sdk::String::from_str(
+            &s.env,
+            "Independent inspection report with photographic evidence"
+        );
+        client.submit_evidence(&trade_id, &mediator, &mediator_ipfs, &mediator_desc);
+        
+        // Verify all three evidence submissions are recorded
+        let evidence_list = client.get_evidence_list(&trade_id);
+        assert_eq!(evidence_list.len(), 3, "Should have three evidence records");
+        
+        // Verify buyer evidence
+        let buyer_record = evidence_list.get(0).unwrap();
+        assert_eq!(buyer_record.submitter, s.buyer);
+        assert_eq!(buyer_record.ipfs_hash, buyer_ipfs);
+        assert_eq!(buyer_record.description_hash, buyer_desc);
+        assert_eq!(buyer_record.submitted_at, 1_000);
+        
+        // Verify seller evidence
+        let seller_record = evidence_list.get(1).unwrap();
+        assert_eq!(seller_record.submitter, s.seller);
+        assert_eq!(seller_record.ipfs_hash, seller_ipfs);
+        assert_eq!(seller_record.description_hash, seller_desc);
+        assert_eq!(seller_record.submitted_at, 2_000);
+        
+        // Verify mediator evidence
+        let mediator_record = evidence_list.get(2).unwrap();
+        assert_eq!(mediator_record.submitter, mediator);
+        assert_eq!(mediator_record.ipfs_hash, mediator_ipfs);
+        assert_eq!(mediator_record.description_hash, mediator_desc);
+        assert_eq!(mediator_record.submitted_at, 3_000);
+        
+        // Verify mediator can still resolve the dispute after submitting evidence
+        client.set_mediator(&mediator);
+        client.resolve_dispute(&trade_id, &6_000_u32);
+        
+        let trade = client.get_trade(&trade_id);
+        assert!(matches!(trade.status, TradeStatus::Completed), "Trade should be completed");
+    }
 }
