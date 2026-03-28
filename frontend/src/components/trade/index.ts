@@ -8,3 +8,5 @@ export { ContractInfo } from "./ContractInfo";
 export { VaultSidebar } from "./VaultSidebar";
 export { ActionBar } from "./ActionBar";
 export { TradeAmountRow } from "./TradeAmountRow";
+export { DisputeVerificationModal } from "./DisputeVerificationModal";
+export type { DisputeVerificationModalProps } from "./DisputeVerificationModal";
