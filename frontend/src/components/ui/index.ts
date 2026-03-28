@@ -5,3 +5,5 @@ export { DriverManifestForm } from "./DriverManifestForm";
 export type { DriverManifestData } from "./DriverManifestForm";
 
 export type {StepIndicatorProps, Step} from "./StepIndicator";
+export { RepScoreRing } from "./RepScoreRing";
+export type { RepScoreRingProps } from "./RepScoreRing";
