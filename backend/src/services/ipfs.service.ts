@@ -1,5 +1,6 @@
 import { Readable } from "stream";
 import { getPinataClient } from "../config/ipfs";
+import { retryAsync } from "../lib/retry";
 import { appLogger } from "../middleware/logger";
 
 export class ServiceUnavailableError extends Error {
@@ -22,10 +23,12 @@ export class IPFSService {
         stream.path = filename;
 
         try {
-            const result = await pinata.pinFileToIPFS(stream, {
-                pinataMetadata: { name: filename },
-                pinataOptions: { cidVersion: 1 },
-            });
+            const result = await retryAsync(() =>
+                pinata.pinFileToIPFS(stream, {
+                    pinataMetadata: { name: filename },
+                    pinataOptions: { cidVersion: 1 },
+                })
+            );
             return result.IpfsHash;
         } catch (err) {
             appLogger.error({ err }, "[IPFSService] Pinata upload failed");

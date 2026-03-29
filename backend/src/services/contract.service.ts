@@ -1,6 +1,7 @@
 import { Trade } from "@prisma/client";
 import * as StellarSdk from "@stellar/stellar-sdk";
 import { env } from "../config/env";
+import { retryAsync } from "../lib/retry";
 
 const DEFAULT_RPC_URL = "https://soroban-testnet.stellar.org";
 const DEFAULT_TIMEOUT_SECONDS = 300;
@@ -68,6 +69,27 @@ function getRpcServer(rpcUrl: string): StellarSdk.rpc.Server {
   return serverFactory(rpcUrl);
 }
 
+async function getRpcAccount(
+  server: StellarSdk.rpc.Server,
+  accountId: string,
+): Promise<StellarSdk.Account> {
+  return retryAsync(() => server.getAccount(accountId));
+}
+
+async function prepareRpcTransaction(
+  server: StellarSdk.rpc.Server,
+  transaction: StellarSdk.Transaction,
+): Promise<StellarSdk.Transaction> {
+  return retryAsync(() => server.prepareTransaction(transaction));
+}
+
+async function simulateRpcTransaction(
+  server: StellarSdk.rpc.Server,
+  transaction: StellarSdk.Transaction,
+): Promise<StellarSdk.rpc.Api.SimulateTransactionResponse> {
+  return retryAsync(() => server.simulateTransaction(transaction));
+}
+
 function getEscrowContractId(): string {
   return env.AMANA_ESCROW_CONTRACT_ID;
 }
@@ -98,7 +120,7 @@ export async function buildConfirmDeliveryTx(
   }
 
   const server = getRpcServer(getRpcUrl());
-  const account = await server.getAccount(sourceAccountId);
+  const account = await getRpcAccount(server, sourceAccountId);
   const contract = new StellarSdk.Contract(getEscrowContractId());
   const transaction = new StellarSdk.TransactionBuilder(account, {
     fee: StellarSdk.BASE_FEE,
@@ -115,7 +137,7 @@ export async function buildConfirmDeliveryTx(
     .setTimeout(30)
     .build();
 
-  const prepared = await server.prepareTransaction(transaction);
+  const prepared = await prepareRpcTransaction(server, transaction);
   return prepared.toXDR();
 }
 
@@ -133,7 +155,7 @@ export async function buildReleaseFundsTx(
   }
 
   const server = getRpcServer(getRpcUrl());
-  const account = await server.getAccount(sourceAccountId);
+  const account = await getRpcAccount(server, sourceAccountId);
   const contract = new StellarSdk.Contract(getEscrowContractId());
   const transaction = new StellarSdk.TransactionBuilder(account, {
     fee: StellarSdk.BASE_FEE,
@@ -150,7 +172,7 @@ export async function buildReleaseFundsTx(
     .setTimeout(30)
     .build();
 
-  const prepared = await server.prepareTransaction(transaction);
+  const prepared = await prepareRpcTransaction(server, transaction);
   return prepared.toXDR();
 }
 
@@ -163,7 +185,7 @@ export async function buildInitiateDisputeTx(
   reasonHash: string,
 ): Promise<string> {
   const server = getRpcServer(getRpcUrl());
-  const account = await server.getAccount(initiatorAddress);
+  const account = await getRpcAccount(server, initiatorAddress);
   const contract = new StellarSdk.Contract(getEscrowContractId());
   const transaction = new StellarSdk.TransactionBuilder(account, {
     fee: StellarSdk.BASE_FEE,
@@ -180,7 +202,7 @@ export async function buildInitiateDisputeTx(
     .setTimeout(30)
     .build();
 
-  const prepared = await server.prepareTransaction(transaction);
+  const prepared = await prepareRpcTransaction(server, transaction);
   return prepared.toXDR();
 }
 
@@ -209,7 +231,7 @@ export class ContractService {
       throw new Error("CONTRACT_ID is not configured");
     }
 
-    const account = await this.rpcServer.getAccount(input.buyerAddress);
+    const account = await getRpcAccount(this.rpcServer, input.buyerAddress);
     const contract = new StellarSdk.Contract(this.contractId);
     const amount = this.toContractAmount(input.amountUsdc);
 
@@ -230,10 +252,10 @@ export class ContractService {
       .setTimeout(DEFAULT_TIMEOUT_SECONDS)
       .build();
 
-    const simulation = await this.rpcServer.simulateTransaction(transaction);
+    const simulation = await simulateRpcTransaction(this.rpcServer, transaction);
     const tradeId = this.extractTradeId(simulation);
     const preparedTransaction =
-      await this.rpcServer.prepareTransaction(transaction);
+      await prepareRpcTransaction(this.rpcServer, transaction);
 
     return {
       tradeId,
@@ -252,7 +274,7 @@ export class ContractService {
       throw new Error("USDC_CONTRACT_ID is not configured");
     }
 
-    const account = await this.rpcServer.getAccount(trade.buyerAddress);
+    const account = await getRpcAccount(this.rpcServer, trade.buyerAddress);
     const contract = new StellarSdk.Contract(this.contractId);
 
     // The current escrow contract pulls the buyer's USDC during `deposit()`,
@@ -271,7 +293,7 @@ export class ContractService {
       .build();
 
     const preparedTransaction =
-      await this.rpcServer.prepareTransaction(transaction);
+      await prepareRpcTransaction(this.rpcServer, transaction);
 
     return {
       unsignedXdr: preparedTransaction.toXDR(),
@@ -289,7 +311,7 @@ export class ContractService {
   }): Promise<{ unsignedXdr: string }> {
     if (!this.contractId) throw new Error("CONTRACT_ID is not configured");
 
-    const account = await this.rpcServer.getAccount(input.sellerAddress);
+    const account = await getRpcAccount(this.rpcServer, input.sellerAddress);
     const contract = new StellarSdk.Contract(this.contractId);
 
     const transaction = new StellarSdk.TransactionBuilder(account, {
@@ -307,7 +329,7 @@ export class ContractService {
       .setTimeout(DEFAULT_TIMEOUT_SECONDS)
       .build();
 
-    const prepared = await this.rpcServer.prepareTransaction(transaction);
+    const prepared = await prepareRpcTransaction(this.rpcServer, transaction);
     return { unsignedXdr: prepared.toXDR() };
   }
 
@@ -321,7 +343,7 @@ export class ContractService {
   }): Promise<{ unsignedXdr: string }> {
     if (!this.contractId) throw new Error("CONTRACT_ID is not configured");
 
-    const account = await this.rpcServer.getAccount(input.initiatorAddress);
+    const account = await getRpcAccount(this.rpcServer, input.initiatorAddress);
     const contract = new StellarSdk.Contract(this.contractId);
 
     const transaction = new StellarSdk.TransactionBuilder(account, {
@@ -339,7 +361,7 @@ export class ContractService {
       .setTimeout(DEFAULT_TIMEOUT_SECONDS)
       .build();
 
-    const prepared = await this.rpcServer.prepareTransaction(transaction);
+    const prepared = await prepareRpcTransaction(this.rpcServer, transaction);
     return { unsignedXdr: prepared.toXDR() };
   }
 

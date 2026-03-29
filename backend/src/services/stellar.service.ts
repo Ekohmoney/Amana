@@ -1,4 +1,5 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
+import { retryAsync } from "../lib/retry";
 import { appLogger } from "../middleware/logger";
 
 export class StellarService {
@@ -27,7 +28,7 @@ export class StellarService {
 
   public async getAccountBalance(publicKey: string, assetCode: string = "USDC"): Promise<string> {
     try {
-      const account = await this.server.loadAccount(publicKey);
+      const account = await retryAsync(() => this.server.loadAccount(publicKey));
       const balance = account.balances.find((b: any) => {
         if (assetCode === "XLM") {
           return b.asset_type === "native";
