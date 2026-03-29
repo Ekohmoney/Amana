@@ -1133,6 +1133,24 @@ mod test {
         let trade_4 = client.get_trade(&trade_id_4);
         assert_eq!(trade_4.buyer_loss_bps, 0);
         assert_eq!(trade_4.seller_loss_bps, 10000);
+
+        // Test 30/70 split
+        let trade_id_5 = client.create_trade(&buyer, &seller, &5000_i128, &3000_u32, &7000_u32);
+        let trade_5 = client.get_trade(&trade_id_5);
+        assert_eq!(trade_5.buyer_loss_bps, 3000);
+        assert_eq!(trade_5.seller_loss_bps, 7000);
+
+        // Test 10/90 split
+        let trade_id_6 = client.create_trade(&buyer, &seller, &6000_i128, &1000_u32, &9000_u32);
+        let trade_6 = client.get_trade(&trade_id_6);
+        assert_eq!(trade_6.buyer_loss_bps, 1000);
+        assert_eq!(trade_6.seller_loss_bps, 9000);
+
+        // Test 25/75 split (middle cases)
+        let trade_id_7 = client.create_trade(&buyer, &seller, &7000_i128, &2500_u32, &7500_u32);
+        let trade_7 = client.get_trade(&trade_id_7);
+        assert_eq!(trade_7.buyer_loss_bps, 2500);
+        assert_eq!(trade_7.seller_loss_bps, 7500);
     }
 
     #[test]
@@ -1185,6 +1203,24 @@ mod test {
 
         // This should panic: 5000 + 4000 = 9000 ≠ 10000
         client.create_trade(&buyer, &seller, &1000_i128, &5000_u32, &4000_u32);
+    }
+
+    #[test]
+    #[should_panic(expected = "loss ratios must sum to 10000 (100%)")]
+    fn test_create_trade_fails_if_ratios_sum_exceeds_10000() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        let seller = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let usdc_id = env.register_stellar_asset_contract(admin.clone());
+        client.initialize(&admin, &usdc_id, &treasury, &100);
+
+        // This should panic: 5001 + 5001 = 10002 > 10000
+        client.create_trade(&buyer, &seller, &1000_i128, &5001_u32, &5001_u32);
     }
 
     // -----------------------------------------------------------------------
@@ -1536,6 +1572,55 @@ mod test {
         assert_eq!(token.balance(&seller), 9_108, "seller with small loss");
         assert_eq!(token.balance(&treasury), 92, "fee on seller portion");
         assert_eq!(token.balance(&buyer), 800, "buyer refund with small loss");
+        assert_eq!(token.balance(&client.address), 0);
+    }
+
+    /// Test 25/75 loss-sharing with 60% seller ruling (40% loss middle case)
+    /// buyer_loss_bps=2500, seller_loss_bps=7500
+    /// seller_gets_bps=6000 (mediator rules 60% for seller, 40% loss)
+    ///
+    /// Calculation:
+    ///   total = 10_000, loss = 40% = 4_000
+    ///   seller_loss = 4_000 * 75% = 3_000
+    ///   buyer_loss = 4_000 * 25% = 1_000
+    ///   seller_raw = 10_000 - 3_000 = 7_000
+    ///   fee = 7_000 * 1% = 70
+    ///   seller_net = 6_930
+    ///   buyer_refund = 1_000
+    #[test]
+    fn test_resolve_with_middle_case_25_75_sharing() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        let seller = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let usdc_id = env.register_stellar_asset_contract(admin.clone());
+        
+        client.initialize(&admin, &usdc_id, &treasury, &100);
+        
+        let amount = 10_000_i128;
+        let token_client = token::StellarAssetClient::new(&env, &usdc_id);
+        token_client.mint(&buyer, &amount);
+        
+        // 25/75 loss-sharing (seller bears 75% of loss)
+        let trade_id = client.create_trade(&buyer, &seller, &amount, &2500_u32, &7500_u32);
+        client.deposit(&trade_id);
+        let reason = mock_reason(&env, "QmMiddleCase25_75Loss");
+        client.initiate_dispute(&trade_id, &buyer, &reason);
+        
+        let mediator = Address::generate(&env);
+        client.set_mediator(&mediator);
+        
+        // Mediator rules 60% for seller (40% loss)
+        client.resolve_dispute(&trade_id, &mediator, &6_000_u32);
+        
+        let token = token::Client::new(&env, &usdc_id);
+        assert_eq!(token.balance(&seller), 6_930, "seller with 25/75 case");
+        assert_eq!(token.balance(&treasury), 70, "fee on seller portion");
+        assert_eq!(token.balance(&buyer), 1_000, "buyer refund 25/75 case");
         assert_eq!(token.balance(&client.address), 0);
     }
 
