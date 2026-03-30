@@ -153,12 +153,20 @@ model TradeEvidence {
   @@index([cid])
 }
 
-/// ProcessedLedger model for tracking the latest processed Stellar ledger
-/// - ledgerSequence: The sequence number of the processed ledger
-/// - processedAt: Timestamp of when the ledger was processed
-model ProcessedLedger {
-  ledgerSequence Int      @id
-  processedAt    DateTime @default(now())
+/// ProcessedEvent model for exactly-once event processing deduplication
+/// - ledgerSequence: The sequence number of the ledger containing the event
+/// - contractId: The contract that emitted the event
+/// - eventId: The unique on-chain event ID
+/// - processedAt: Timestamp of when the event was processed
+model ProcessedEvent {
+  id              Int      @id @default(autoincrement())
+  ledgerSequence  Int
+  contractId      String   @db.VarChar(255)
+  eventId         String   @db.VarChar(255)
+  processedAt     DateTime @default(now())
+
+  @@unique([ledgerSequence, contractId, eventId])
+  @@index([ledgerSequence])
 }
 
 /// Vault model representing a savings vault on Soroban

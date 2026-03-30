@@ -1,9 +1,67 @@
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient, Prisma } from "@prisma/client";
 import * as StellarSdk from "@stellar/stellar-sdk";
 import { getEventListenerConfig, EventListenerConfig } from "../config/eventListener.config";
 import { EventType, ParsedEvent } from "../types/events";
 import { dispatchEvent } from "./eventHandlers";
 import { appLogger } from "../middleware/logger";
+
+/**
+ * Check whether a `ProcessedEvent` record already exists for the given composite key.
+ * Returns `true` if the event has been processed before, `false` otherwise.
+ *
+ * Requirement 3.4: checks the DB (not only in-memory cache) so restarts don't bypass deduplication.
+ */
+export async function isAlreadyProcessed(
+  prisma: PrismaClient,
+  key: { ledgerSequence: number; contractId: string; eventId: string }
+): Promise<boolean> {
+  const existing = await prisma.processedEvent.findUnique({
+    where: {
+      ledgerSequence_contractId_eventId: key,
+    },
+  });
+  return existing !== null;
+}
+
+/**
+ * Returns true if the error is a Prisma unique-constraint violation (P2002).
+ */
+export function isPrismaUniqueConstraintError(err: unknown): boolean {
+  return (err as any)?.code === "P2002";
+}
+
+/**
+ * Wraps the handler call and the `ProcessedEvent` marker insert in a single
+ * Prisma transaction, guaranteeing atomicity (Requirement 2.1, 2.2, 2.3).
+ *
+ * If a P2002 unique-constraint violation is raised (concurrent duplicate),
+ * the error is swallowed and the event is treated as already-processed
+ * (Requirement 1.3).
+ */
+export async function processEventAtomically(
+  prisma: PrismaClient,
+  event: ParsedEvent,
+  handler: (tx: Prisma.TransactionClient, event: ParsedEvent) => Promise<void>
+): Promise<void> {
+  try {
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      await handler(tx, event);
+      await tx.processedEvent.create({
+        data: {
+          ledgerSequence: event.ledgerSequence,
+          contractId: event.contractId,
+          eventId: event.eventId,
+        },
+      });
+    });
+  } catch (err) {
+    if (isPrismaUniqueConstraintError(err)) {
+      appLogger.debug({ eventId: event.eventId }, "[EventListener] Duplicate insert ignored");
+      return;
+    }
+    throw err;
+  }
+}
 
 /**
  * EventListenerService — long-running service that polls Soroban RPC for
@@ -18,7 +76,7 @@ export class EventListenerService {
   private prisma: PrismaClient;
   private config: EventListenerConfig;
   private server: StellarSdk.rpc.Server;
-  private processedLedgers: Set<number> = new Set();
+  private processedEvents: Set<string> = new Set();
   private lastLedger: number = 0;
   private running: boolean = false;
   private timeoutHandle: ReturnType<typeof setTimeout> | null = null;
@@ -37,15 +95,16 @@ export class EventListenerService {
     this.running = true;
 
     // Hydrate in-memory set from DB on startup
-    const recentLedgers = await this.prisma.processedLedger.findMany({
+    const recentEvents = await this.prisma.processedEvent.findMany({
       orderBy: { ledgerSequence: "desc" },
       take: this.config.processedLedgersCacheSize,
     });
-    for (const l of recentLedgers) {
-      this.processedLedgers.add(l.ledgerSequence);
+    for (const e of recentEvents) {
+      const cacheKey = `${e.ledgerSequence}:${e.contractId}:${e.eventId}`;
+      this.processedEvents.add(cacheKey);
     }
-    if (recentLedgers.length > 0) {
-      this.lastLedger = recentLedgers[0].ledgerSequence;
+    if (recentEvents.length > 0) {
+      this.lastLedger = recentEvents[0].ledgerSequence;
     }
 
     appLogger.info(
@@ -105,39 +164,34 @@ export class EventListenerService {
 
   /** Parse a single raw Soroban event and dispatch to the appropriate handler. */
   async processEvent(rawEvent: StellarSdk.rpc.Api.EventResponse): Promise<void> {
-    const ledgerSequence = rawEvent.ledger;
-
-    // Duplicate check — skip if already processed
-    if (this.processedLedgers.has(ledgerSequence)) {
-      return;
-    }
-
     const parsed = this.parseEvent(rawEvent);
     if (!parsed) return;
 
+    const { ledgerSequence, contractId, eventId } = parsed;
+    const cacheKey = `${ledgerSequence}:${contractId}:${eventId}`;
+
+    // Fast path: in-memory cache
+    if (this.processedEvents.has(cacheKey)) return;
+
+    // Durable path: DB check (survives restarts)
+    if (await isAlreadyProcessed(this.prisma, { ledgerSequence, contractId, eventId })) {
+      this.processedEvents.add(cacheKey);
+      return;
+    }
+
     try {
-      await dispatchEvent(this.prisma, parsed);
-
-      // Record as processed — memory + DB
-      this.processedLedgers.add(ledgerSequence);
-      this.evictOldLedgers();
-
-      await this.prisma.processedLedger.upsert({
-        where: { ledgerSequence },
-        update: {},
-        create: { ledgerSequence },
-      });
-
+      await processEventAtomically(this.prisma, parsed, dispatchEvent);
+      this.processedEvents.add(cacheKey);
+      this.evictOldEvents();
       if (ledgerSequence > this.lastLedger) {
         this.lastLedger = ledgerSequence;
       }
-
       appLogger.debug(
         { eventType: parsed.eventType, tradeId: parsed.tradeId, ledger: ledgerSequence },
         "[EventListener] Processed event"
       );
     } catch (error) {
-      appLogger.error({ error, ledgerSequence }, "[EventListener] Failed to process event");
+      appLogger.error({ error, eventId }, "[EventListener] Failed to process event");
     }
   }
 
@@ -171,6 +225,8 @@ export class EventListenerService {
         eventType,
         tradeId: String(tradeId),
         ledgerSequence: rawEvent.ledger,
+        contractId: String(rawEvent.contractId ?? this.config.contractId),
+        eventId: rawEvent.id,
         data,
       };
     } catch (error) {
@@ -235,14 +291,18 @@ export class EventListenerService {
     this.currentBackoffMs = this.config.backoffInitialMs;
   }
 
-  /** Evict oldest ledgers from in-memory set when it exceeds the cache limit. */
-  private evictOldLedgers(): void {
-    if (this.processedLedgers.size <= this.config.processedLedgersCacheSize) return;
+  /** Evict oldest events from in-memory set when it exceeds the cache limit. */
+  private evictOldEvents(): void {
+    if (this.processedEvents.size <= this.config.processedLedgersCacheSize) return;
 
-    const sorted = Array.from(this.processedLedgers).sort((a, b) => a - b);
+    const sorted = Array.from(this.processedEvents).sort((a, b) => {
+      const ledgerA = parseInt(a.split(":")[0], 10);
+      const ledgerB = parseInt(b.split(":")[0], 10);
+      return ledgerA - ledgerB;
+    });
     const toRemove = sorted.length - this.config.processedLedgersCacheSize;
     for (let i = 0; i < toRemove; i++) {
-      this.processedLedgers.delete(sorted[i]);
+      this.processedEvents.delete(sorted[i]);
     }
   }
 }

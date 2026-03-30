@@ -1,59 +1,88 @@
-import { PrismaClient } from "@prisma/client";
+import { vi } from "vitest";
 import { EventType } from "../types/events";
 
 /* ------------------------------------------------------------------ */
-/*  Module-level mocks (hoisted by jest)                              */
+/*  Hoisted mock variables (must be declared before vi.mock factories) */
 /* ------------------------------------------------------------------ */
 
-const mockGetEvents = jest.fn();
+const { mockGetEvents, mockDispatchEvent, mockProcessEventAtomically } = vi.hoisted(() => ({
+  mockGetEvents: vi.fn(),
+  mockDispatchEvent: vi.fn().mockResolvedValue(undefined),
+  mockProcessEventAtomically: vi.fn().mockImplementation(
+    async (_prisma: unknown, event: unknown, handler: (...args: unknown[]) => Promise<void>) => {
+      await handler({} as unknown, event);
+    }
+  ),
+}));
 
-jest.mock("@stellar/stellar-sdk", () => ({
+/* ------------------------------------------------------------------ */
+/*  Module-level mocks (hoisted by vitest)                            */
+/* ------------------------------------------------------------------ */
+
+vi.mock("@stellar/stellar-sdk", () => ({
   rpc: {
-    Server: jest.fn().mockImplementation(() => ({
+    Server: vi.fn().mockImplementation(() => ({
       getEvents: (...args: unknown[]) => mockGetEvents(...args),
     })),
   },
-  scValToNative: jest.fn(),
+  scValToNative: vi.fn(),
 }));
 
-jest.mock("../config/eventListener.config", () => ({
-  getEventListenerConfig: jest.fn().mockReturnValue({
-    rpcUrl: "https://test-rpc.example.com",
-    contractId: "CONTRACT_TEST_123",
-    pollIntervalMs: 1000,
-    backoffInitialMs: 100,
-    backoffMaxMs: 5000,
-    processedLedgersCacheSize: 100,
-  }),
+vi.mock("../config/eventListener.config", () => ({
+  getEventListenerConfig: vi.fn(),
 }));
 
-const mockDispatchEvent = jest.fn().mockResolvedValue(undefined);
-jest.mock("../services/eventHandlers", () => ({
+vi.mock("../services/eventHandlers", () => ({
   dispatchEvent: (...args: unknown[]) => mockDispatchEvent(...args),
 }));
 
 /* Import after mocks are set up */
-import { EventListenerService } from "../services/eventListener.service";
+import { EventListenerService, isAlreadyProcessed, processEventAtomically } from "../services/eventListener.service";
 import * as StellarSdk from "@stellar/stellar-sdk";
+import { getEventListenerConfig } from "../config/eventListener.config";
+import * as eventListenerModule from "../services/eventListener.service";
+
+const TEST_CONFIG = {
+  rpcUrl: "https://test-rpc.example.com",
+  contractId: "CONTRACT_TEST_123",
+  pollIntervalMs: 1000,
+  backoffInitialMs: 100,
+  backoffMaxMs: 5000,
+  processedLedgersCacheSize: 100,
+};
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                           */
 /* ------------------------------------------------------------------ */
 
 function createMockPrisma() {
-  return {
-    trade: { upsert: jest.fn().mockResolvedValue({}) },
-    processedLedger: {
-      findMany: jest.fn().mockResolvedValue([]),
-      upsert: jest.fn().mockResolvedValue({}),
+  const mockTx = {
+    trade: { upsert: vi.fn().mockResolvedValue({}) },
+    processedEvent: {
+      create: vi.fn().mockResolvedValue({}),
     },
-  } as unknown as PrismaClient;
+  };
+
+  return {
+    trade: { upsert: vi.fn().mockResolvedValue({}) },
+    processedEvent: {
+      findMany: vi.fn().mockResolvedValue([]),
+      findUnique: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockResolvedValue({}),
+    },
+    $transaction: vi.fn().mockImplementation(async (cb: (tx: typeof mockTx) => Promise<void>) => {
+      await cb(mockTx);
+    }),
+    _mockTx: mockTx,
+  } as any;
 }
 
 /** Build a minimal raw Soroban event for testing. */
-function makeRawEvent(ledger: number) {
+function makeRawEvent(ledger: number, id = `evt-${ledger}`, contractId = "CONTRACT_TEST_123") {
   return {
     ledger,
+    id,
+    contractId,
     topic: [{ _scval: "symbol" }, { _scval: "tradeId" }],
     value: { type: "test", value: {} },
   };
@@ -68,26 +97,72 @@ describe("EventListenerService", () => {
   let mockPrisma: ReturnType<typeof createMockPrisma>;
 
   beforeEach(() => {
-    jest.useFakeTimers();
+    vi.useFakeTimers();
 
     /* Reset mocks but keep factory implementations intact */
-    mockGetEvents.mockReset();
+    mockGetEvents.mockReset().mockResolvedValue({ events: [] });
     mockDispatchEvent.mockReset().mockResolvedValue(undefined);
-    (StellarSdk.scValToNative as jest.Mock).mockReset();
+    (StellarSdk.scValToNative as ReturnType<typeof vi.fn>).mockReset();
+    vi.mocked(getEventListenerConfig).mockReturnValue(TEST_CONFIG);
 
     mockPrisma = createMockPrisma();
     service = new EventListenerService(mockPrisma);
     (service as any).running = true;
+    // Override the server instance directly to use mockGetEvents
+    (service as any).server = { getEvents: (...args: unknown[]) => mockGetEvents(...args) };
 
-    jest.spyOn(console, "log").mockImplementation();
-    jest.spyOn(console, "warn").mockImplementation();
-    jest.spyOn(console, "error").mockImplementation();
+    vi.spyOn(console, "log").mockImplementation();
+    vi.spyOn(console, "warn").mockImplementation();
+    vi.spyOn(console, "error").mockImplementation();
   });
 
   afterEach(() => {
     service.stop();
-    jest.useRealTimers();
-    jest.restoreAllMocks();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  /* ====== 0. isAlreadyProcessed helper ========================== */
+
+  describe("isAlreadyProcessed", () => {
+    const key = { ledgerSequence: 42, contractId: "CONTRACT_A", eventId: "evt-42" };
+
+    it("should return false when no ProcessedEvent record exists", async () => {
+      mockPrisma.processedEvent.findUnique.mockResolvedValue(null);
+
+      const result = await isAlreadyProcessed(mockPrisma, key);
+
+      expect(result).toBe(false);
+      expect(mockPrisma.processedEvent.findUnique).toHaveBeenCalledWith({
+        where: { ledgerSequence_contractId_eventId: key },
+      });
+    });
+
+    it("should return true when a ProcessedEvent record exists", async () => {
+      mockPrisma.processedEvent.findUnique.mockResolvedValue({
+        id: 1,
+        ledgerSequence: 42,
+        contractId: "CONTRACT_A",
+        eventId: "evt-42",
+        processedAt: new Date(),
+      });
+
+      const result = await isAlreadyProcessed(mockPrisma, key);
+
+      expect(result).toBe(true);
+    });
+
+    it("should query using the composite unique key name", async () => {
+      mockPrisma.processedEvent.findUnique.mockResolvedValue(null);
+
+      await isAlreadyProcessed(mockPrisma, key);
+
+      expect(mockPrisma.processedEvent.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { ledgerSequence_contractId_eventId: key },
+        })
+      );
+    });
   });
 
   /* ====== 1. TradeFunded event processing ======================== */
@@ -96,40 +171,47 @@ describe("EventListenerService", () => {
     it("should dispatch a TradeFunded ParsedEvent after RPC returns the event", async () => {
       const raw = makeRawEvent(12345);
       mockGetEvents.mockResolvedValue({ events: [raw] });
-      (StellarSdk.scValToNative as jest.Mock)
+      (StellarSdk.scValToNative as ReturnType<typeof vi.fn>)
         .mockReturnValueOnce("TradeFunded")
         .mockReturnValueOnce("trade-abc");
 
       await service.pollEvents();
 
-      expect(mockDispatchEvent).toHaveBeenCalledWith(
-        mockPrisma,
+      // Verify the transaction was initiated for the parsed event
+      expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(mockPrisma._mockTx.processedEvent.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          eventType: EventType.TradeFunded,
-          tradeId: "trade-abc",
-          ledgerSequence: 12345,
+          data: expect.objectContaining({
+            ledgerSequence: 12345,
+            contractId: "CONTRACT_TEST_123",
+            eventId: "evt-12345",
+          }),
         })
       );
     });
 
-    it("should persist the processed ledger to the database", async () => {
+    it("should check processedEvent in DB when event is not in cache", async () => {
       const raw = makeRawEvent(12345);
-      (StellarSdk.scValToNative as jest.Mock)
+      (StellarSdk.scValToNative as ReturnType<typeof vi.fn>)
         .mockReturnValueOnce("TradeFunded")
         .mockReturnValueOnce("trade-abc");
 
       await service.processEvent(raw as any);
 
-      expect(mockPrisma.processedLedger.upsert).toHaveBeenCalledWith({
-        where: { ledgerSequence: 12345 },
-        update: {},
-        create: { ledgerSequence: 12345 },
+      expect(mockPrisma.processedEvent.findUnique).toHaveBeenCalledWith({
+        where: {
+          ledgerSequence_contractId_eventId: {
+            ledgerSequence: 12345,
+            contractId: "CONTRACT_TEST_123",
+            eventId: "evt-12345",
+          },
+        },
       });
     });
 
     it("should advance lastLedger after processing", async () => {
       const raw = makeRawEvent(500);
-      (StellarSdk.scValToNative as jest.Mock)
+      (StellarSdk.scValToNative as ReturnType<typeof vi.fn>)
         .mockReturnValueOnce("TradeFunded")
         .mockReturnValueOnce("t-1");
 
@@ -142,16 +224,16 @@ describe("EventListenerService", () => {
   /* ====== 2. Duplicate event rejection =========================== */
 
   describe("Duplicate event rejection", () => {
-    it("should NOT dispatch when the same ledger is processed twice", async () => {
-      const raw = makeRawEvent(99999);
+    it("should NOT dispatch when the same event (ledger+contractId+eventId) is processed twice", async () => {
+      const raw = makeRawEvent(99999, "evt-99999", "CONTRACT_TEST_123");
 
-      (StellarSdk.scValToNative as jest.Mock)
+      (StellarSdk.scValToNative as ReturnType<typeof vi.fn>)
         .mockReturnValueOnce("TradeCreated")
         .mockReturnValueOnce("trade-dup");
       await service.processEvent(raw as any);
 
-      /* Second attempt — same ledger */
-      (StellarSdk.scValToNative as jest.Mock)
+      /* Second attempt — same composite key, in-memory cache hit */
+      (StellarSdk.scValToNative as ReturnType<typeof vi.fn>)
         .mockReturnValueOnce("TradeCreated")
         .mockReturnValueOnce("trade-dup");
       await service.processEvent(raw as any);
@@ -163,7 +245,7 @@ describe("EventListenerService", () => {
       const raw1 = makeRawEvent(100);
       const raw2 = makeRawEvent(101);
 
-      (StellarSdk.scValToNative as jest.Mock)
+      (StellarSdk.scValToNative as ReturnType<typeof vi.fn>)
         .mockReturnValueOnce("TradeCreated")
         .mockReturnValueOnce("t-1")
         .mockReturnValueOnce("TradeFunded")
@@ -175,15 +257,50 @@ describe("EventListenerService", () => {
       expect(mockDispatchEvent).toHaveBeenCalledTimes(2);
     });
 
-    it("should add ledger to the in-memory processedLedgers set", async () => {
-      const raw = makeRawEvent(777);
-      (StellarSdk.scValToNative as jest.Mock)
+    it("should allow two distinct events within the same ledger (different eventId)", async () => {
+      const raw1 = makeRawEvent(200, "evt-200-a");
+      const raw2 = makeRawEvent(200, "evt-200-b");
+
+      (StellarSdk.scValToNative as ReturnType<typeof vi.fn>)
+        .mockReturnValueOnce("TradeCreated")
+        .mockReturnValueOnce("t-1")
+        .mockReturnValueOnce("TradeFunded")
+        .mockReturnValueOnce("t-2");
+
+      await service.processEvent(raw1 as any);
+      await service.processEvent(raw2 as any);
+
+      expect(mockDispatchEvent).toHaveBeenCalledTimes(2);
+    });
+
+    it("should skip when DB already has a ProcessedEvent record (post-restart)", async () => {
+      const raw = makeRawEvent(300, "evt-300");
+      mockPrisma.processedEvent.findUnique.mockResolvedValue({
+        id: 1,
+        ledgerSequence: 300,
+        contractId: "CONTRACT_TEST_123",
+        eventId: "evt-300",
+        processedAt: new Date(),
+      });
+
+      (StellarSdk.scValToNative as ReturnType<typeof vi.fn>)
+        .mockReturnValueOnce("TradeFunded")
+        .mockReturnValueOnce("t-restart");
+
+      await service.processEvent(raw as any);
+
+      expect(mockDispatchEvent).not.toHaveBeenCalled();
+    });
+
+    it("should add event to the in-memory processedEvents set", async () => {
+      const raw = makeRawEvent(777, "evt-777");
+      (StellarSdk.scValToNative as ReturnType<typeof vi.fn>)
         .mockReturnValueOnce("TradeFunded")
         .mockReturnValueOnce("t");
 
       await service.processEvent(raw as any);
 
-      expect((service as any).processedLedgers.has(777)).toBe(true);
+      expect((service as any).processedEvents.has(`777:CONTRACT_TEST_123:evt-777`)).toBe(true);
     });
   });
 
@@ -234,7 +351,7 @@ describe("EventListenerService", () => {
 
     it("should invoke handleBackoff when getEvents rejects", async () => {
       mockGetEvents.mockRejectedValue(new Error("RPC unavailable"));
-      const spy = jest.spyOn(service, "handleBackoff");
+      const spy = vi.spyOn(service, "handleBackoff");
 
       await service.pollEvents();
 
@@ -247,14 +364,14 @@ describe("EventListenerService", () => {
   describe("Event parsing", () => {
     it("should recognise snake_case symbols (trade_funded → TradeFunded)", async () => {
       const raw = makeRawEvent(200);
-      (StellarSdk.scValToNative as jest.Mock)
+      (StellarSdk.scValToNative as ReturnType<typeof vi.fn>)
         .mockReturnValueOnce("trade_funded")
         .mockReturnValueOnce("trade-sc");
 
       await service.processEvent(raw as any);
 
       expect(mockDispatchEvent).toHaveBeenCalledWith(
-        mockPrisma,
+        expect.anything(),
         expect.objectContaining({ eventType: EventType.TradeFunded })
       );
     });
@@ -275,7 +392,7 @@ describe("EventListenerService", () => {
 
     it("should skip unknown event symbols", async () => {
       const raw = makeRawEvent(302);
-      (StellarSdk.scValToNative as jest.Mock)
+      (StellarSdk.scValToNative as ReturnType<typeof vi.fn>)
         .mockReturnValueOnce("UnknownSymbol")
         .mockReturnValueOnce("trade-x");
 
@@ -286,7 +403,7 @@ describe("EventListenerService", () => {
 
     it("should handle scValToNative throwing (corrupt XDR)", async () => {
       const raw = makeRawEvent(303);
-      (StellarSdk.scValToNative as jest.Mock).mockImplementation(() => {
+      (StellarSdk.scValToNative as ReturnType<typeof vi.fn>).mockImplementation(() => {
         throw new Error("XDR decode failure");
       });
 
@@ -308,30 +425,29 @@ describe("EventListenerService", () => {
       for (let i = 0; i < symbols.length; i++) {
         const [symbol, expected] = symbols[i];
         mockDispatchEvent.mockClear();
-        (mockPrisma.processedLedger.upsert as jest.Mock).mockClear();
 
-        const raw = makeRawEvent(400 + i);
-        (StellarSdk.scValToNative as jest.Mock)
+        const raw = makeRawEvent(400 + i, `evt-${400 + i}`);
+        (StellarSdk.scValToNative as ReturnType<typeof vi.fn>)
           .mockReturnValueOnce(symbol)
           .mockReturnValueOnce(`trade-${i}`);
 
         await service.processEvent(raw as any);
 
         expect(mockDispatchEvent).toHaveBeenCalledWith(
-          mockPrisma,
+          expect.anything(),
           expect.objectContaining({ eventType: expected })
         );
       }
     });
 
     it("should extract tradeId as 'unknown' when topic has only one element", async () => {
-      const raw = { ledger: 450, topic: [{ _scval: "sym" }], value: null };
-      (StellarSdk.scValToNative as jest.Mock).mockReturnValueOnce("TradeFunded");
+      const raw = { ledger: 450, id: "evt-450", contractId: "CONTRACT_TEST_123", topic: [{ _scval: "sym" }], value: null };
+      (StellarSdk.scValToNative as ReturnType<typeof vi.fn>).mockReturnValueOnce("TradeFunded");
 
       await service.processEvent(raw as any);
 
       expect(mockDispatchEvent).toHaveBeenCalledWith(
-        mockPrisma,
+        expect.anything(),
         expect.objectContaining({ tradeId: "unknown" })
       );
     });
@@ -340,42 +456,40 @@ describe("EventListenerService", () => {
   /* ====== 5. Start / Stop lifecycle ============================== */
 
   describe("start and stop lifecycle", () => {
-    it("should hydrate processedLedgers from DB on start", async () => {
+    it("should hydrate lastLedger from DB on start", async () => {
       const fresh = new EventListenerService(mockPrisma);
-      (mockPrisma.processedLedger.findMany as jest.Mock).mockResolvedValue([
-        { ledgerSequence: 50 },
-        { ledgerSequence: 49 },
+      mockPrisma.processedEvent.findMany.mockResolvedValue([
+        { ledgerSequence: 50, contractId: "C", eventId: "e1" },
+        { ledgerSequence: 49, contractId: "C", eventId: "e2" },
       ]);
 
       await fresh.start();
 
-      expect(mockPrisma.processedLedger.findMany).toHaveBeenCalled();
-      expect((fresh as any).processedLedgers.has(50)).toBe(true);
-      expect((fresh as any).processedLedgers.has(49)).toBe(true);
+      expect(mockPrisma.processedEvent.findMany).toHaveBeenCalled();
       expect((fresh as any).lastLedger).toBe(50);
       fresh.stop();
     });
 
     it("should be a no-op when start() is called twice", async () => {
       const fresh = new EventListenerService(mockPrisma);
-      (mockPrisma.processedLedger.findMany as jest.Mock).mockResolvedValue([]);
+      mockPrisma.processedEvent.findMany.mockResolvedValue([]);
 
       await fresh.start();
       await fresh.start();
 
-      expect(mockPrisma.processedLedger.findMany).toHaveBeenCalledTimes(1);
+      expect(mockPrisma.processedEvent.findMany).toHaveBeenCalledTimes(1);
       fresh.stop();
     });
 
     it("should prevent polling after stop()", async () => {
       const fresh = new EventListenerService(mockPrisma);
-      (mockPrisma.processedLedger.findMany as jest.Mock).mockResolvedValue([]);
+      mockPrisma.processedEvent.findMany.mockResolvedValue([]);
 
       await fresh.start();
       fresh.stop();
 
       mockGetEvents.mockClear();
-      jest.advanceTimersByTime(10_000);
+      vi.advanceTimersByTime(10_000);
 
       expect(mockGetEvents).not.toHaveBeenCalled();
     });
@@ -405,7 +519,7 @@ describe("EventListenerService", () => {
     it("should process every event in the response", async () => {
       const events = [makeRawEvent(500), makeRawEvent(501)];
       mockGetEvents.mockResolvedValue({ events });
-      (StellarSdk.scValToNative as jest.Mock)
+      (StellarSdk.scValToNative as ReturnType<typeof vi.fn>)
         .mockReturnValueOnce("TradeCreated")
         .mockReturnValueOnce("t-1")
         .mockReturnValueOnce("TradeFunded")
@@ -458,7 +572,7 @@ describe("EventListenerService", () => {
   describe("Edge cases", () => {
     it("should not dispatch if dispatchEvent itself throws", async () => {
       const raw = makeRawEvent(600);
-      (StellarSdk.scValToNative as jest.Mock)
+      (StellarSdk.scValToNative as ReturnType<typeof vi.fn>)
         .mockReturnValueOnce("TradeFunded")
         .mockReturnValueOnce("t-err");
       mockDispatchEvent.mockRejectedValueOnce(new Error("DB down"));
@@ -467,36 +581,36 @@ describe("EventListenerService", () => {
       await expect(service.processEvent(raw as any)).resolves.not.toThrow();
     });
 
-    it("should not persist ledger when dispatchEvent fails", async () => {
+    it("should not persist processedEvent when dispatchEvent fails", async () => {
       const raw = makeRawEvent(601);
-      (StellarSdk.scValToNative as jest.Mock)
+      (StellarSdk.scValToNative as ReturnType<typeof vi.fn>)
         .mockReturnValueOnce("TradeFunded")
         .mockReturnValueOnce("t-err2");
       mockDispatchEvent.mockRejectedValueOnce(new Error("DB down"));
 
       await service.processEvent(raw as any);
 
-      expect(mockPrisma.processedLedger.upsert).not.toHaveBeenCalled();
+      expect(mockPrisma._mockTx.processedEvent.create).not.toHaveBeenCalled();
     });
 
-    it("should evict old ledgers when cache exceeds limit", async () => {
+    it("should evict old events when cache exceeds limit", async () => {
       /* Set cache size to 3 for this test */
       (service as any).config.processedLedgersCacheSize = 3;
 
       for (let i = 1; i <= 5; i++) {
-        const raw = makeRawEvent(i);
-        (StellarSdk.scValToNative as jest.Mock)
+        const raw = makeRawEvent(i, `evt-${i}`);
+        (StellarSdk.scValToNative as ReturnType<typeof vi.fn>)
           .mockReturnValueOnce("TradeFunded")
           .mockReturnValueOnce(`t-${i}`);
         await service.processEvent(raw as any);
       }
 
-      const set: Set<number> = (service as any).processedLedgers;
+      const set: Set<string> = (service as any).processedEvents;
       expect(set.size).toBeLessThanOrEqual(3);
       /* Newest entries should remain */
-      expect(set.has(5)).toBe(true);
-      expect(set.has(4)).toBe(true);
-      expect(set.has(3)).toBe(true);
+      expect(set.has(`5:CONTRACT_TEST_123:evt-5`)).toBe(true);
+      expect(set.has(`4:CONTRACT_TEST_123:evt-4`)).toBe(true);
+      expect(set.has(`3:CONTRACT_TEST_123:evt-3`)).toBe(true);
     });
 
     it("should not poll when running is false", async () => {

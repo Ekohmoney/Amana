@@ -29,6 +29,8 @@ export interface ParsedEvent {
   eventType: EventType;
   tradeId: string;
   ledgerSequence: number;
+  contractId: string;
+  eventId: string; // raw Soroban event.id
   /** Raw data payload from Soroban event */
   data: Record<string, unknown>;
 }
