@@ -28,11 +28,12 @@ export function AppTopNav() {
             <Link
               key={item.href}
               href={item.href}
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
                 isActive
-                  ? "text-text-primary bg-elevated"
-                  : "text-text-secondary hover:text-text-primary"
+                  ? "bg-elevated text-gold border-b-2 border-gold"
+                  : "text-text-secondary hover:text-text-primary hover:bg-white/5 focus-visible:outline-offset-2 focus-visible:outline-gold"
               }`}
+              aria-current={isActive ? "page" : undefined}
             >
               {item.label}
             </Link>

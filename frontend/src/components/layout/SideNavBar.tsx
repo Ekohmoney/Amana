@@ -156,10 +156,10 @@ export function SideNavBar({
                   aria-current={isActive ? "page" : undefined}
                   className={`flex items-center ${
                     collapsed ? "justify-center px-2" : "px-4"
-                  } py-3 border-l-4 ${
+                  } py-3 border-l-4 transition-all ${
                     isActive
-                      ? "border-l-4 border-gold bg-elevated text-text-primary"
-                      : "border-transparent text-text-secondary hover:bg-white/5 hover:border-l-4 hover:border-border-hover transition-colors"
+                      ? "border-l-gold bg-elevated text-gold"
+                      : "border-transparent text-text-secondary hover:text-text-primary hover:bg-white/5 focus-visible:outline-offset-2 focus-visible:outline-gold"
                   }`}
                   title={collapsed ? item.label : undefined}
                 >
