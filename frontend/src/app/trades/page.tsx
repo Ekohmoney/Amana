@@ -17,9 +17,9 @@ const FILTERS: { label: string; value: TradeStatus }[] = [
 
 const STATUS_STYLES: Record<string, string> = {
   active: "text-status-success bg-emerald-muted",
-  pending: "text-status-warning bg-yellow-500/10",
+  pending: "text-status-warning bg-status-warning/15",
   completed: "text-text-secondary bg-bg-elevated",
-  disputed: "text-status-danger bg-red-500/10",
+  disputed: "text-status-danger bg-status-danger/15",
   locked: "text-status-locked bg-gold-muted",
 };
 
@@ -129,7 +129,7 @@ export default function TradesPage() {
 
       {/* Error state */}
       {error && !loading && (
-        <div className="rounded-lg border border-status-danger/20 bg-red-500/10 px-4 py-3 text-center">
+        <div className="rounded-lg border border-status-danger/40 bg-status-danger/15 px-4 py-3 text-center">
           <p className="text-status-danger text-sm">{error}</p>
         </div>
       )}
