@@ -1,9 +1,8 @@
 #![no_std]
-#![allow(deprecated)] // env.events().publish() is deprecated in 25.x but .emit() isn't stable yet
 
 use soroban_sdk::{
-    Address, Bytes, Env, String, Symbol, Vec, contract, contractimpl, contracttype, symbol_short,
-    token,
+    Address, Bytes, Env, String, Symbol, Vec, contract, contractevent, contractimpl, contracttype,
+    symbol_short, token,
 };
 
 // ---------------------------------------------------------------------------
@@ -19,14 +18,14 @@ const INSTANCE_TTL_EXTEND_TO: u32 = 50_000;
 // Constants
 // ---------------------------------------------------------------------------
 
-#[contracttype]
+#[contractevent(topics = ["amana", "initialized"])]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InitializedEvent {
     pub admin: Address,
     pub fee_bps: u32,
 }
 
-#[contracttype]
+#[contractevent(topics = ["TRDCRT"])]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TradeCreatedEvent {
     pub trade_id: u64,
@@ -35,14 +34,14 @@ pub struct TradeCreatedEvent {
     pub amount: i128,
 }
 
-#[contracttype]
+#[contractevent(topics = ["TRDFND"])]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TradeFundedEvent {
     pub trade_id: u64,
     pub amount: i128,
 }
 
-#[contracttype]
+#[contractevent(topics = ["TRDCAN"])]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TradeCancelledEvent {
     pub trade_id: u64,
@@ -50,14 +49,14 @@ pub struct TradeCancelledEvent {
     pub caller: Address,
 }
 
-#[contracttype]
+#[contractevent(topics = ["DELCNF"])]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeliveryConfirmedEvent {
     pub trade_id: u64,
     pub delivered_at: u64,
 }
 
-#[contracttype]
+#[contractevent(topics = ["RELSD"])]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FundsReleasedEvent {
     pub trade_id: u64,
@@ -72,7 +71,7 @@ pub struct FundsReleasedEvent {
 ///   fee          =  7_000 *   100 / 10_000 =    70
 ///   seller_net   =  7_000 -    70          = 6_930
 ///   buyer_refund = 10_000 -  7_000         = 3_000
-#[contracttype]
+#[contractevent(topics = ["DISRES"])]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DisputeResolvedEvent {
     pub trade_id: u64,
@@ -82,7 +81,7 @@ pub struct DisputeResolvedEvent {
 }
 
 /// Emitted when a party submits evidence during a live dispute.
-#[contracttype]
+#[contractevent(topics = ["EVDSUB"])]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EvidenceSubmittedEvent {
     pub trade_id: u64,
@@ -93,7 +92,7 @@ pub struct EvidenceSubmittedEvent {
 /// Emitted when a buyer or seller formally initiates a dispute.
 /// `reason_hash` is an IPFS CID or human-readable string hash describing the
 /// grounds for the dispute, recorded immutably on-chain.
-#[contracttype]
+#[contractevent(topics = ["DISINI"])]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DisputeInitiatedEvent {
     pub trade_id: u64,
@@ -102,7 +101,7 @@ pub struct DisputeInitiatedEvent {
 }
 
 /// Emitted when a video proof is submitted for a trade.
-#[contracttype]
+#[contractevent(topics = ["VIDPRF"])]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VideoProofSubmittedEvent {
     pub trade_id: u64,
@@ -111,7 +110,7 @@ pub struct VideoProofSubmittedEvent {
 }
 
 /// Emitted when seller submits hashed delivery manifest fields.
-#[contracttype]
+#[contractevent(topics = ["MNFST"])]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ManifestSubmittedEvent {
     pub trade_id: u64,
@@ -121,14 +120,14 @@ pub struct ManifestSubmittedEvent {
 }
 
 /// Emitted when a mediator address is added to the registry by the admin.
-#[contracttype]
+#[contractevent(topics = ["MEDADD"])]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MediatorAddedEvent {
     pub mediator: Address,
 }
 
 /// Emitted when a mediator address is removed from the registry by the admin.
-#[contracttype]
+#[contractevent(topics = ["MEDREM"])]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MediatorRemovedEvent {
     pub mediator: Address,
@@ -222,7 +221,7 @@ pub enum DataKey {
     Trade(u64),
     Initialized,
     Admin,
-    UsdcContract,
+    CngnContract,
     FeeBps,
     Treasury,
     /// Legacy single-mediator slot — used by set_mediator() / require_mediator().
@@ -265,7 +264,7 @@ impl EscrowContract {
     pub fn initialize(
         env: Env,
         admin: Address,
-        usdc_contract: Address,
+        cngn_contract: Address,
         treasury: Address,
         fee_bps: u32,
     ) {
@@ -277,19 +276,17 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage()
             .instance()
-            .set(&DataKey::UsdcContract, &usdc_contract);
+            .set(&DataKey::CngnContract, &cngn_contract);
         env.storage().instance().set(&DataKey::Treasury, &treasury);
         env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
         env.storage().instance().set(&DataKey::Initialized, &true);
         Self::bump_instance_ttl(&env);
-        env.events().publish(
-            ("amana", "initialized"),
-            InitializedEvent { admin, fee_bps },
-        );
+        InitializedEvent { admin, fee_bps }.publish(&env);
     }
 
     /// Register a single legacy mediator address. Only the admin may call this.
     /// For multi-mediator support, prefer `add_mediator()`.
+    /// Emits `MediatorAdded` so governance indexers see every registration path.
     pub fn set_mediator(env: Env, mediator: Address) {
         let admin: Address = env
             .storage()
@@ -302,6 +299,10 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::MediatorRegistry(mediator.clone()), &true);
+        MediatorAddedEvent {
+            mediator: mediator.clone(),
+        }
+        .publish(&env);
     }
 
     // -----------------------------------------------------------------------
@@ -320,12 +321,10 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::MediatorRegistry(mediator_address.clone()), &true);
-        env.events().publish(
-            (symbol_short!("MEDADD"), mediator_address.clone()),
-            MediatorAddedEvent {
-                mediator: mediator_address,
-            },
-        );
+        MediatorAddedEvent {
+            mediator: mediator_address,
+        }
+        .publish(&env);
     }
 
     /// Remove `mediator_address` from the approved mediator registry.
@@ -356,12 +355,10 @@ impl EscrowContract {
             }
         }
 
-        env.events().publish(
-            (symbol_short!("MEDREM"), mediator_address.clone()),
-            MediatorRemovedEvent {
-                mediator: mediator_address,
-            },
-        );
+        MediatorRemovedEvent {
+            mediator: mediator_address,
+        }
+        .publish(&env);
     }
 
     /// Returns `true` if `address` is currently in the approved mediator registry.
@@ -432,17 +429,17 @@ impl EscrowContract {
         let ledger_seq = env.ledger().sequence() as u64;
         let trade_id = (ledger_seq << 32) | next_id;
         env.storage().instance().set(&NEXT_TRADE_ID, &(next_id + 1));
-        let usdc_address: Address = env
+        let cngn_address: Address = env
             .storage()
             .instance()
-            .get(&DataKey::UsdcContract)
+            .get(&DataKey::CngnContract)
             .expect("Not initialized");
         let now = env.ledger().timestamp();
         let trade = Trade {
             trade_id,
             buyer: buyer.clone(),
             seller: seller.clone(),
-            token: usdc_address,
+            token: cngn_address,
             amount,
             status: TradeStatus::Created,
             created_at: now,
@@ -455,15 +452,13 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::Trade(trade_id), &trade);
-        env.events().publish(
-            (symbol_short!("TRDCRT"), trade_id),
-            TradeCreatedEvent {
-                trade_id,
-                buyer,
-                seller,
-                amount,
-            },
-        );
+        TradeCreatedEvent {
+            trade_id,
+            buyer,
+            seller,
+            amount,
+        }
+        .publish(&env);
         Self::bump_instance_ttl(&env);
         trade_id
     }
@@ -487,13 +482,11 @@ impl EscrowContract {
         trade.funded_at = Some(now);
         trade.updated_at = now;
         env.storage().persistent().set(&key, &trade);
-        env.events().publish(
-            (symbol_short!("TRDFND"), trade_id),
-            TradeFundedEvent {
-                trade_id,
-                amount: trade.amount,
-            },
-        );
+        TradeFundedEvent {
+            trade_id,
+            amount: trade.amount,
+        }
+        .publish(&env);
     }
 
     pub fn cancel_trade(env: Env, trade_id: u64, caller: Address) {
@@ -570,14 +563,12 @@ impl EscrowContract {
             .persistent()
             .set(&DataKey::Trade(trade.trade_id), trade);
 
-        env.events().publish(
-            (symbol_short!("TRDCAN"), trade.trade_id),
-            TradeCancelledEvent {
-                trade_id: trade.trade_id,
-                refund_amount,
-                caller,
-            },
-        );
+        TradeCancelledEvent {
+            trade_id: trade.trade_id,
+            refund_amount,
+            caller,
+        }
+        .publish(env);
     }
 
     pub fn confirm_delivery(env: Env, trade_id: u64) {
@@ -597,13 +588,11 @@ impl EscrowContract {
         trade.delivered_at = Some(now);
         trade.updated_at = now;
         env.storage().persistent().set(&key, &trade);
-        env.events().publish(
-            (symbol_short!("DELCNF"), trade_id),
-            DeliveryConfirmedEvent {
-                trade_id,
-                delivered_at: now,
-            },
-        );
+        DeliveryConfirmedEvent {
+            trade_id,
+            delivered_at: now,
+        }
+        .publish(&env);
     }
 
     pub fn release_funds(env: Env, trade_id: u64) {
@@ -626,6 +615,12 @@ impl EscrowContract {
             .expect("Treasury not set");
         let fee_amount = (trade.amount * (fee_bps as i128)) / BPS_DIVISOR;
         let seller_amount = trade.amount - fee_amount;
+        assert!(
+            seller_amount + fee_amount == trade.amount,
+            "release_funds: cNGN conservation invariant violated"
+        );
+        assert!(seller_amount >= 0, "seller_amount must be non-negative");
+        assert!(fee_amount >= 0, "fee_amount must be non-negative");
         let token_client = token::Client::new(&env, &trade.token);
         token_client.transfer(
             &env.current_contract_address(),
@@ -639,14 +634,12 @@ impl EscrowContract {
         trade.status = TradeStatus::Completed;
         trade.updated_at = now;
         env.storage().persistent().set(&key, &trade);
-        env.events().publish(
-            (symbol_short!("RELSD"), trade_id),
-            FundsReleasedEvent {
-                trade_id,
-                seller_amount,
-                fee_amount,
-            },
-        );
+        FundsReleasedEvent {
+            trade_id,
+            seller_amount,
+            fee_amount,
+        }
+        .publish(&env);
     }
 
     // -----------------------------------------------------------------------
@@ -702,14 +695,12 @@ impl EscrowContract {
         env.storage().persistent().set(&key, &trade);
 
         // Emit on-chain event
-        env.events().publish(
-            (symbol_short!("DISINI"), trade_id),
-            DisputeInitiatedEvent {
-                trade_id,
-                initiator,
-                reason_hash,
-            },
-        );
+        DisputeInitiatedEvent {
+            trade_id,
+            initiator,
+            reason_hash,
+        }
+        .publish(&env);
     }
 
     /// Retrieve the `DisputeRecord` stored by `initiate_dispute()`, if any.
@@ -808,6 +799,15 @@ impl EscrowContract {
         let fee = (seller_raw * (fee_bps as i128)) / BPS_DIVISOR;
         let seller_net = seller_raw - fee;
 
+        // Invariants: all payouts non-negative and sum to total cNGN escrowed
+        assert!(seller_net >= 0, "seller_net must be non-negative");
+        assert!(buyer_refund >= 0, "buyer_refund must be non-negative");
+        assert!(fee >= 0, "fee must be non-negative");
+        assert!(
+            seller_net + buyer_refund + fee == total,
+            "resolve_dispute: cNGN conservation invariant violated"
+        );
+
         // 5. Execute three atomic transfers
         let token_client = token::Client::new(&env, &trade.token);
 
@@ -828,15 +828,13 @@ impl EscrowContract {
         env.storage().persistent().set(&key, &trade);
 
         // 7. Emit event
-        env.events().publish(
-            (symbol_short!("DISRES"), trade_id),
-            DisputeResolvedEvent {
-                trade_id,
-                seller_payout: seller_net,
-                buyer_refund,
-                mediator,
-            },
-        );
+        DisputeResolvedEvent {
+            trade_id,
+            seller_payout: seller_net,
+            buyer_refund,
+            mediator,
+        }
+        .publish(&env);
     }
 
     // -----------------------------------------------------------------------
@@ -914,14 +912,12 @@ impl EscrowContract {
             .persistent()
             .set(&DataKey::Evidence(trade_id, caller.clone()), &legacy_bytes);
 
-        env.events().publish(
-            (symbol_short!("EVDSUB"), trade_id),
-            EvidenceSubmittedEvent {
-                trade_id,
-                submitter: caller,
-                evidence_hash: legacy_bytes,
-            },
-        );
+        EvidenceSubmittedEvent {
+            trade_id,
+            submitter: caller,
+            evidence_hash: legacy_bytes,
+        }
+        .publish(&env);
     }
 
     /// Return all evidence records submitted for a trade, in chronological order.
@@ -989,14 +985,12 @@ impl EscrowContract {
 
         env.storage().persistent().set(&proof_key, &record);
 
-        env.events().publish(
-            (symbol_short!("VIDPRF"), trade_id),
-            VideoProofSubmittedEvent {
-                trade_id,
-                submitter,
-                ipfs_cid,
-            },
-        );
+        VideoProofSubmittedEvent {
+            trade_id,
+            submitter,
+            ipfs_cid,
+        }
+        .publish(&env);
     }
 
     /// Submit hashed delivery manifest fields for a funded trade.
@@ -1023,15 +1017,13 @@ impl EscrowContract {
         };
         env.storage().persistent().set(&manifest_key, &record);
 
-        env.events().publish(
-            (symbol_short!("MNFST"), trade_id),
-            ManifestSubmittedEvent {
-                trade_id,
-                seller,
-                driver_name_hash,
-                driver_id_hash,
-            },
-        );
+        ManifestSubmittedEvent {
+            trade_id,
+            seller,
+            driver_name_hash,
+            driver_id_hash,
+        }
+        .publish(&env);
     }
 
     /// Fetch manifest record for a trade, if present.
